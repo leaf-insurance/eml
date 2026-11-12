@@ -28,10 +28,12 @@ Deliberate deviations from gen_smtp, where gen_smtp raised an error:
 | `rich-text-missing-last-boundary.eml` | `missing_last_boundary` error | two parts, `MissingCloseDelimiter` |
 | `rich-text-broken-last-boundary.eml` | `missing_last_boundary` error | three parts (the final opening delimiter opens an empty part), `MissingCloseDelimiter` |
 
-Deferred to M2 (they need RFC 2047, RFC 2231 or charset decoding): the
-decoded Subject of `malformed-folded-multibyte-header.eml`, the filenames in
-`utf-attachment-name.eml`, and the charset conversion of `chinesemail`,
-`shift-jismail`, `unicode-body.eml` and `unicode-subject.eml`.
+Since M2, the decoded Subject of `malformed-folded-multibyte-header.eml`,
+the filenames in `utf-attachment-name.eml`, and the text of
+`unicode-subject.eml` and `unicode-body.eml` are asserted too. `chinesemail`
+(GB2312) and `shift-jismail` (Shift_JIS, ISO-2022-JP) use charsets that are
+not built in: their text is reported as `UnsupportedCharset`, and the tests
+check that a caller-supplied decoder is used instead.
 
 ## Files (SHA-256)
 

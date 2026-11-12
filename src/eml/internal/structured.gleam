@@ -71,6 +71,20 @@ pub fn parse_content_type(
   }
 }
 
+/// Parses an unfolded Content-Disposition value (RFC 2183): a token and
+/// parameters. Returns `None` when there is no disposition type.
+pub fn parse_disposition(
+  value: BitArray,
+) -> #(Option(#(String, List(#(String, BitArray)))), List(Kind)) {
+  case token(skip_cfws(value)) {
+    #(<<>>, _) -> #(None, [])
+    #(type_, rest) -> {
+      let #(parameters, kinds) = parameters(rest, [], set.new(), [])
+      #(Some(#(ascii_lowercase(type_), parameters)), kinds)
+    }
+  }
+}
+
 fn parameters(
   rest: BitArray,
   acc: List(#(String, BitArray)),
@@ -90,21 +104,18 @@ fn parameters(
                 diagnostic.InvalidParameter,
                 ..kinds
               ])
+            // Every occurrence is kept, so that RFC 2231 resolution can see
+            // a duplicated section. Lookups take the first.
             Ok(#(name, value, rest, value_kinds)) -> {
               let kinds = list.append(value_kinds, kinds)
+              let acc = [#(name, value), ..acc]
               case set.contains(seen, name) {
                 True ->
                   parameters(rest, acc, seen, [
                     diagnostic.DuplicateParameter(name),
                     ..kinds
                   ])
-                False ->
-                  parameters(
-                    rest,
-                    [#(name, value), ..acc],
-                    set.insert(seen, name),
-                    kinds,
-                  )
+                False -> parameters(rest, acc, set.insert(seen, name), kinds)
               }
             }
           }
@@ -167,7 +178,10 @@ fn quoted_string(
 ) -> #(BitArray, BitArray, Bool) {
   case rest {
     <<"\"", rest:bytes>> -> #(finish(acc), rest, True)
-    <<"\\", c, rest:bytes>> -> quoted_string(rest, [<<c>>, ..acc])
+    // A backslash only escapes `"` and `\`. Windows clients write paths
+    // such as `"C:\dir\file.txt"` without escaping them.
+    <<"\\", c, rest:bytes>> if c == 34 || c == 92 ->
+      quoted_string(rest, [<<c>>, ..acc])
     <<c, rest:bytes>> -> quoted_string(rest, [<<c>>, ..acc])
     _ -> #(finish(acc), <<>>, False)
   }
@@ -177,21 +191,39 @@ fn finish(acc: List(BitArray)) -> BitArray {
   acc |> list.reverse |> bit_array.concat
 }
 
-/// An unquoted value runs to the next `;` or `(` (which starts a comment),
-/// with trailing whitespace trimmed. This tolerates unquoted values
-/// containing tspecials or spaces.
+/// An unquoted value runs to the next `;`, with trailing whitespace
+/// trimmed. This tolerates unquoted values containing tspecials or spaces. A
+/// `(` starts a comment, ending the value, only when nothing but whitespace
+/// follows the comment before the next `;`: in `boundary=b (note)` it is a
+/// comment, in `filename=foo (1).pdf` it is part of the value.
 fn unquoted_value(
   start: BitArray,
   rest: BitArray,
   length: Int,
 ) -> #(BitArray, BitArray) {
   case rest {
-    <<";", _:bytes>> | <<"(", _:bytes>> | <<>> -> #(
+    <<"(", after:bytes>> ->
+      case skip_whitespace(skip_comment(after, 1)) {
+        <<>> | <<";", _:bytes>> -> #(
+          trim_trailing_whitespace(slice(start, 0, length)),
+          rest,
+        )
+        _ -> unquoted_value(start, after, length + 1)
+      }
+    <<";", _:bytes>> | <<>> -> #(
       trim_trailing_whitespace(slice(start, 0, length)),
       rest,
     )
     <<_, rest:bytes>> -> unquoted_value(start, rest, length + 1)
     _ -> #(trim_trailing_whitespace(slice(start, 0, length)), rest)
+  }
+}
+
+fn skip_whitespace(rest: BitArray) -> BitArray {
+  case rest {
+    <<c, rest:bytes>> if c == 32 || c == 9 || c == 13 || c == 10 ->
+      skip_whitespace(rest)
+    _ -> rest
   }
 }
 
@@ -374,6 +406,32 @@ pub fn ascii_lowercase(bits: BitArray) -> String {
   case bit_array.to_string(bits) {
     Ok(string) -> string.lowercase(string)
     Error(_) -> ""
+  }
+}
+
+/// Removes leading and trailing SP, TAB, CR and LF, in one pass. (On
+/// Erlang, gleam_stdlib's `string.trim` compiles a pattern on every call,
+/// which is slow for many small strings.)
+pub fn trim(bits: BitArray) -> BitArray {
+  let start = leading_whitespace(bits, 0)
+  slice(bits, start, content_end(slice(bits, start, -1), start, start))
+}
+
+fn leading_whitespace(bits: BitArray, count: Int) -> Int {
+  case bits {
+    <<c, rest:bytes>> if c == 32 || c == 9 || c == 13 || c == 10 ->
+      leading_whitespace(rest, count + 1)
+    _ -> count
+  }
+}
+
+/// The position after the last byte that is not whitespace.
+fn content_end(bits: BitArray, pos: Int, end: Int) -> Int {
+  case bits {
+    <<c, rest:bytes>> if c == 32 || c == 9 || c == 13 || c == 10 ->
+      content_end(rest, pos + 1, end)
+    <<_, rest:bytes>> -> content_end(rest, pos + 1, pos + 1)
+    _ -> end
   }
 }
 

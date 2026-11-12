@@ -5,8 +5,13 @@
 //// Large inputs also catch stack overflows on the JavaScript target.
 
 import eml
+import eml/address
+import eml/charset
+import eml/encoded_word
+import eml/filename
 import eml/internal/base64
 import eml/internal/quoted_printable
+import gleam/bit_array
 import gleam/int
 import gleam/list
 import gleam/string
@@ -169,5 +174,87 @@ pub fn many_parameters_test() {
       >>
     },
     parse,
+  )
+}
+
+pub fn many_addresses_test() {
+  assert_linear(
+    "addresses",
+    fn(k) {
+      <<
+        "To: ":utf8,
+        string.repeat("Alice <a@b.test>, @@@, ", k * unit / 8):utf8,
+        "\r\n\r\n":utf8,
+      >>
+    },
+    fn(input) { eml.addresses(eml.root(parse(input)), "to") },
+  )
+}
+
+pub fn long_encoded_subject_test() {
+  assert_linear(
+    "encoded words",
+    fn(k) {
+      <<
+        "Subject: ":utf8,
+        string.repeat("=?utf-8?q?caf=C3=A9?= ", k * unit / 8):utf8,
+        "\r\n\r\n":utf8,
+      >>
+    },
+    fn(input) { eml.subject(eml.root(parse(input))) },
+  )
+}
+
+// Malformed inputs from the M2 code reviews (pi-M9, fable-F02, fable-F11,
+// fable-F01). Each was quadratic, or overflowed the stack on JavaScript.
+
+pub fn unclosed_encoded_words_test() {
+  assert_linear(
+    "unclosed encoded words",
+    fn(k) { <<string.repeat("=?a?q?x", k * unit / 16):utf8>> },
+    fn(input) { encoded_word.decode(input, charset.default_options()) },
+  )
+}
+
+pub fn unclosed_comments_test() {
+  assert_linear(
+    "unclosed comments",
+    fn(k) { <<string.repeat("(<", k * unit / 8):utf8, "a@b>":utf8>> },
+    fn(input) { address.parse(input, charset.default_options()) },
+  )
+}
+
+pub fn unclosed_quoted_strings_test() {
+  assert_linear(
+    "unclosed quoted strings",
+    fn(k) { <<"\"":utf8, string.repeat("<\\\"", k * unit / 8):utf8>> },
+    fn(input) { address.parse(input, charset.default_options()) },
+  )
+}
+
+pub fn nested_groups_test() {
+  assert_linear(
+    "nested groups",
+    fn(k) { <<string.repeat("a:", k * unit / 8):utf8>> },
+    fn(input) { address.parse(input, charset.default_options()) },
+  )
+}
+
+pub fn filename_trailing_dots_test() {
+  assert_linear(
+    "filename trailing dots",
+    fn(k) { <<"a":utf8, string.repeat(". ", k * unit / 8):utf8>> },
+    fn(input) {
+      let assert Ok(name) = bit_array.to_string(input)
+      filename.safe(name)
+    },
+  )
+}
+
+pub fn long_dotted_local_part_test() {
+  assert_linear(
+    "dotted local part",
+    fn(k) { <<string.repeat("a.", k * unit / 8):utf8, "a@b.test":utf8>> },
+    fn(input) { address.parse(input, charset.default_options()) },
   )
 }

@@ -32,10 +32,18 @@ pub fn bad_parameter_keeps_type_test() {
 }
 
 pub fn duplicate_parameter_first_wins_test() {
+  // Every occurrence is kept (RFC 2231 resolution needs them); lookups take
+  // the first.
   assert content_type("multipart/mixed; boundary=a; boundary=b")
-    == #(Some(ContentType("multipart", "mixed", [#("boundary", <<"a">>)])), [
-      diagnostic.DuplicateParameter("boundary"),
-    ])
+    == #(
+      Some(
+        ContentType("multipart", "mixed", [
+          #("boundary", <<"a">>),
+          #("boundary", <<"b">>),
+        ]),
+      ),
+      [diagnostic.DuplicateParameter("boundary")],
+    )
 }
 
 pub fn unquoted_value_with_specials_test() {

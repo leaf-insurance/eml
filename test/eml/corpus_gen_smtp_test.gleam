@@ -2,11 +2,14 @@
 //// the structural assertions of gen_smtp's `parse_example_mails_test_`.
 
 import eml.{type Entity}
+import eml/charset
 import eml/diagnostic
 import eml/mime
+import eml/parameter
 import eml/support
 import gleam/bit_array
 import gleam/list
+import gleam/option.{Some}
 import gleam/string
 import simplifile
 
@@ -241,15 +244,75 @@ pub fn no_line_break_before_first_boundary_test() {
 }
 
 pub fn malformed_folded_multibyte_header_test() {
-  // The decoded Subject is deferred to M2.
-  assert text(root("malformed-folded-multibyte-header.eml")) == "Hello world\n"
+  let entity = root("malformed-folded-multibyte-header.eml")
+  assert text(entity) == "Hello world\n"
+  // A multibyte character is split across the two encoded-words.
+  assert eml.subject(entity)
+    == mime.Single("NOD32 Smart Security - бесплатная лицензия")
 }
 
 pub fn utf_attachment_name_test() {
-  // The decoded filenames are deferred to M2.
   let entity = root("utf-attachment-name.eml")
   assert shape(entity) == "multipart/mixed[text/plain,text/plain]"
   assert text(part(entity, 0)) == "Hello\r\n"
+  // KOI8-R encoded-words, in Content-Type `name` and in a folded
+  // Content-Disposition `filename`.
+  let attachment = part(entity, 1)
+  assert eml.filename(attachment) == Some("тестовый файл.txt")
+  let assert Ok(name) =
+    list.key_find(eml.content_type(attachment).parameters, "name")
+  assert parameter.resolve([#("name", name)], "name", charset.default_options()).0
+    == parameter.Resolved("тестовый файл.txt")
+  assert eml.bodies(load("utf-attachment-name.eml")).attachments
+    |> list.map(eml.path)
+    == [[1]]
+}
+
+pub fn unicode_subject_test() {
+  assert eml.subject(root("unicode-subject.eml")) == mime.Single("①⓫⅓㏨♳𝄞λ")
+}
+
+pub fn unicode_body_test() {
+  let entity = root("unicode-body.eml")
+  let bodies = eml.bodies(load("unicode-body.eml"))
+  let assert [text_part] = bodies.text
+  let #(decoded, diagnostics) = eml.decode_text(text_part)
+  let assert Ok(_) = decoded
+  assert diagnostics == []
+  assert shape(entity) != ""
+}
+
+pub fn gb2312_test() {
+  // GB2312 (GBK) is not built in: the text is not decoded, and the
+  // encoded-words are kept literally.
+  let entity = root("chinesemail")
+  let #(decoded, diagnostics) = eml.decode_text(entity)
+  assert decoded == Error(Nil)
+  assert list.map(diagnostics, fn(d) { d.kind })
+    == [diagnostic.UnsupportedCharset("gb2312")]
+  let assert mime.Single(subject) = eml.subject(entity)
+  assert string.starts_with(subject, "=?GB2312?B?")
+  // A caller-supplied decoder is used instead.
+  let options =
+    charset.default_options()
+    |> charset.with_decoder(fn(label, _) {
+      case label {
+        "GB2312" -> Ok("decoded")
+        _ -> Error(Nil)
+      }
+    })
+  assert eml.decode_text_with(entity, options).0 == Ok("decoded")
+}
+
+pub fn shift_jis_test() {
+  let entity = root("shift-jismail")
+  assert shape(entity) == "multipart/alternative[text/plain]"
+  let #(decoded, diagnostics) = eml.decode_text(part(entity, 0))
+  assert decoded == Error(Nil)
+  assert list.map(diagnostics, fn(d) { d.kind })
+    == [diagnostic.UnsupportedCharset("shift_jis")]
+  let assert mime.Single(subject) = eml.subject(entity)
+  assert string.starts_with(subject, "=?ISO-2022-JP?B?")
 }
 
 pub fn testcase1_test() {

@@ -5,18 +5,24 @@ Erlang and JavaScript, and has no native dependencies.
 
 ```gleam
 import eml
+import eml/filename
 import gleam/list
+import gleam/option
 
-pub fn attachments(bytes: BitArray) {
+pub fn summary(bytes: BitArray) {
   let assert Ok(message) = eml.parse(bytes)
-  case eml.body(eml.root(message)) {
-    eml.Multipart(parts:, ..) ->
-      list.map(parts, fn(part) {
-        let #(content, _diagnostics) = eml.decode_body(part)
-        #(eml.content_type(part), content)
-      })
-    _ -> []
-  }
+  let root = eml.root(message)
+  let subject = eml.subject(root)
+  let bodies = eml.bodies(message)
+  // The text body: decoded with its charset.
+  let text = list.map(bodies.text, fn(part) { eml.decode_text(part).0 })
+  // Attachments: a suggested file name and the decoded bytes.
+  let attachments =
+    list.map(bodies.attachments, fn(part) {
+      let name = option.unwrap(eml.filename(part), "attachment")
+      #(filename.safe(name), eml.decode_body(part).0)
+    })
+  #(subject, text, attachments)
 }
 ```
 
@@ -38,23 +44,23 @@ pub fn attachments(bytes: BitArray) {
 
 ## Status
 
-Milestone 1 is done:
+Milestones 1 and 2 are done:
 
-- framing (CRLF, LF and CR line endings, BOM, mbox `From ` line);
-- header blocks, kept losslessly;
-- Content-Type and Content-Transfer-Encoding;
-- the MIME tree;
-- base64 and quoted-printable decoding.
+- framing (CRLF, LF and CR line endings, BOM, mbox `From ` line), header
+  blocks kept losslessly, the MIME tree, and base64 and quoted-printable
+  decoding;
+- charsets: UTF-8 and the 28 WHATWG single-byte encodings, with a
+  caller-supplied decoder for others (CJK, UTF-16);
+- header text with RFC 2047 encoded-words (`eml.subject`,
+  `eml.header_text`);
+- addresses (`eml.from`, `eml.addresses`, `eml/address`);
+- filenames with RFC 2231 and RFC 2047 (`eml.filename`), and safe file
+  names (`eml/filename`);
+- body and attachment roles, as in JMAP (`eml.bodies`);
+- `eml.diagnose` and `eml.validate`.
 
-Milestone 2 adds:
-
-- decoded header text (RFC 2047);
-- filenames (RFC 2231);
-- charset decoding;
-- addresses;
-- helpers for choosing the text and HTML bodies and the attachments.
-
-Until then, header values and decoded bodies are bytes.
+Milestone 3 adds dates, message IDs, format=flowed, more charsets, and
+coverage-guided fuzzing.
 
 ## Development
 

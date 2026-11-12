@@ -25,6 +25,8 @@ type Counters {
     excess_at: Int,
     after_padding: Option(#(Int, Int)),
     nonzero_pad_at: Int,
+    /// Where data followed a single `=` that needed a second one (P1).
+    missing_padding_at: Int,
   )
 }
 
@@ -44,6 +46,7 @@ pub fn decode(
       excess_at: 0,
       after_padding: None,
       nonzero_pad_at: -1,
+      missing_padding_at: -1,
     )
   loop(input, offset, 0, 0, <<>>, [], 0, counters)
 }
@@ -84,6 +87,13 @@ fn loop(
             }
             _ -> {
               // Data after padding: decoding continues with a new quantum.
+              // In P1 the second `=` is missing too.
+              let counters = case
+                state == p1 && counters.missing_padding_at < 0
+              {
+                True -> Counters(..counters, missing_padding_at: pos)
+                False -> counters
+              }
               let counters = case counters.after_padding {
                 None ->
                   Counters(..counters, after_padding: Some(#(length, pos)))
@@ -187,6 +197,10 @@ fn diagnostics(counters: Counters) -> List(#(Kind, Option(Span))) {
   |> prepend(counters.nonzero_pad_at >= 0, #(
     diagnostic.NonZeroPadBits,
     at(counters.nonzero_pad_at),
+  ))
+  |> prepend(counters.missing_padding_at >= 0, #(
+    diagnostic.MissingBase64Padding,
+    at(counters.missing_padding_at),
   ))
   |> fn(kinds) {
     case counters.after_padding {

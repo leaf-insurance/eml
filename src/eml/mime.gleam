@@ -13,6 +13,12 @@ pub type ContentType {
   )
 }
 
+/// A parsed Content-Disposition field (RFC 2183). `type_` and parameter
+/// names are lowercase ASCII.
+pub type Disposition {
+  Disposition(type_: String, parameters: List(#(String, BitArray)))
+}
+
 pub type TransferEncoding {
   SevenBit
   EightBit

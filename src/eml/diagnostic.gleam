@@ -69,8 +69,26 @@ pub type Kind {
   InvalidQuotedPrintable(count: Int)
   UnencodedOctets(count: Int)
 
-  // Recorded once when `max_diagnostics` is reached.
-  DiagnosticsTruncated
+  // Charset decoding (§G).
+  NonAsciiInAscii
+  C1ReinterpretedAsWindows1252
+  MalformedCharsetData(count: Int)
+  UnsupportedCharset(label: String)
+  UnknownCharset(label: String)
+  DeclaredCharsetOverridden(label: String)
+  NulInText(count: Int)
+  EightBitHeader
+
+  // Header text, parameters and addresses (§H).
+  InvalidEncodedWord(count: Int)
+  EncodedWordSplitCharacter
+  AmbiguousParameter(name: String)
+  MalformedParameter(name: String)
+  InvalidAddress
+
+  /// Recorded once when `max_diagnostics` is reached. Its severity is the
+  /// worst severity among the diagnostics that were dropped.
+  DiagnosticsTruncated(worst: Severity)
 }
 
 /// `path` identifies the entity (see `eml.part_at`), and `span` is the first
@@ -87,6 +105,8 @@ pub type Diagnostic {
 /// The severity of each kind is fixed, so it can be derived from the kind.
 pub fn severity(kind: Kind) -> Severity {
   case kind {
+    DiagnosticsTruncated(worst) -> worst
+
     ByteOrderMark
     | NoBlankLineAfterHeaders
     | SpaceBeforeColon
@@ -96,7 +116,9 @@ pub fn severity(kind: Kind) -> Severity {
     | NonZeroPadBits
     | TrailingSoftBreak
     | UnencodedOctets(_)
-    | DiagnosticsTruncated -> Info
+    | C1ReinterpretedAsWindows1252
+    | NulInText(_)
+    | EncodedWordSplitCharacter -> Info
 
     FirstLineIsContinuation
     | NonHeaderLine
@@ -117,14 +139,24 @@ pub fn severity(kind: Kind) -> Severity {
     | StrayPadding(_)
     | InvalidBase64Characters(_)
     | Base64DataAfterPadding(_)
-    | InvalidQuotedPrintable(_) -> Warning
+    | InvalidQuotedPrintable(_)
+    | NonAsciiInAscii
+    | MalformedCharsetData(_)
+    | UnknownCharset(_)
+    | DeclaredCharsetOverridden(_)
+    | EightBitHeader
+    | InvalidEncodedWord(_)
+    | AmbiguousParameter(_)
+    | MalformedParameter(_)
+    | InvalidAddress -> Warning
 
     MissingBoundary
     | UnusableBoundary
     | StartDelimiterNotFound
     | NotAMessage
     | UnknownTransferEncoding(_)
-    | InvalidBase64Length -> DataLoss
+    | InvalidBase64Length
+    | UnsupportedCharset(_) -> DataLoss
   }
 }
 

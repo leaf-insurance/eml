@@ -39,8 +39,9 @@ pub fn header_bytes_test() {
   let options = fn(max) {
     eml.default_options() |> eml.with_max_header_bytes(max)
   }
-  let assert Ok(_) = eml.parse_with(input, options(18))
-  assert eml.parse_with(input, options(17))
+  // The separator does not count: the block is the 16-byte field line.
+  let assert Ok(_) = eml.parse_with(input, options(16))
+  assert eml.parse_with(input, options(15))
     == Error(mime.LimitExceeded(mime.MaxHeaderBytes))
 }
 
@@ -49,8 +50,9 @@ pub fn header_lines_test() {
   let options = fn(max) {
     eml.default_options() |> eml.with_max_header_lines(max)
   }
-  let assert Ok(_) = eml.parse_with(input, options(4))
-  assert eml.parse_with(input, options(3))
+  // Two fields and a continuation; the separator does not count.
+  let assert Ok(_) = eml.parse_with(input, options(3))
+  assert eml.parse_with(input, options(2))
     == Error(mime.LimitExceeded(mime.MaxHeaderLines))
 }
 
@@ -64,7 +66,7 @@ pub fn diagnostics_are_truncated_test() {
       diagnostic.NonHeaderLine,
       diagnostic.NonHeaderLine,
       diagnostic.NonHeaderLine,
-      diagnostic.DiagnosticsTruncated,
+      diagnostic.DiagnosticsTruncated(diagnostic.Warning),
     ]
 }
 
@@ -73,5 +75,5 @@ pub fn diagnostics_cap_zero_test() {
   let options = eml.default_options() |> eml.with_max_diagnostics(0)
   let assert Ok(message) = eml.parse_with(input, options)
   assert list.map(eml.diagnostics(message), fn(d) { d.kind })
-    == [diagnostic.DiagnosticsTruncated]
+    == [diagnostic.DiagnosticsTruncated(diagnostic.Warning)]
 }

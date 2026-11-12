@@ -72,6 +72,9 @@ type State {
     // Reversed.
     diagnostics: List(Diagnostic),
     count: Int,
+    /// The worst severity among the diagnostics dropped after
+    /// `max_diagnostics` was reached.
+    dropped: Option(diagnostic.Severity),
   )
 }
 
@@ -100,7 +103,7 @@ type Stop {
 pub fn parse(source: BitArray, limits: Limits) -> Result(Parsed, ParseError) {
   let size = bit_array.byte_size(source)
   use <- guard(bit_array.bit_size(source) != size * 8, mime.NotByteAligned)
-  let state = State(limits:, parts: 0, diagnostics: [], count: 0)
+  let state = State(limits:, parts: 0, diagnostics: [], count: 0, dropped: None)
   let #(bom, pos, state) = case source {
     <<0xEF, 0xBB, 0xBF, _:bytes>> -> #(
       Some(Span(0, 3)),
@@ -122,8 +125,16 @@ pub fn parse(source: BitArray, limits: Limits) -> Result(Parsed, ParseError) {
     Root,
     state,
   ))
-  let diagnostics = list.reverse(state.diagnostics)
-  Ok(Parsed(bom:, envelope:, root:, diagnostics:))
+  // The truncation diagnostic is the last one recorded: it gets the worst
+  // dropped severity.
+  let diagnostics = case state.dropped, state.diagnostics {
+    Some(worst), [last, ..rest] -> [
+      diagnostic.new(diagnostic.DiagnosticsTruncated(worst), last.path, None),
+      ..rest
+    ]
+    _, diagnostics -> diagnostics
+  }
+  Ok(Parsed(bom:, envelope:, root:, diagnostics: list.reverse(diagnostics)))
 }
 
 fn guard(
@@ -167,6 +178,17 @@ fn envelope(source: BitArray, size: Int, pos: Int) -> #(Option(Span), Int) {
   }
 }
 
+fn worse(
+  current: Option(diagnostic.Severity),
+  new: diagnostic.Severity,
+) -> diagnostic.Severity {
+  case current, new {
+    Some(diagnostic.DataLoss), _ | _, diagnostic.DataLoss -> diagnostic.DataLoss
+    Some(diagnostic.Warning), _ | _, diagnostic.Warning -> diagnostic.Warning
+    _, _ -> diagnostic.Info
+  }
+}
+
 fn push(
   state: State,
   kind: Kind,
@@ -185,12 +207,21 @@ fn push(
       State(
         ..state,
         diagnostics: [
-          diagnostic.new(diagnostic.DiagnosticsTruncated, path, None),
+          diagnostic.new(
+            diagnostic.DiagnosticsTruncated(diagnostic.Info),
+            path,
+            None,
+          ),
           ..state.diagnostics
         ],
         count: count + 1,
+        dropped: Some(worse(state.dropped, diagnostic.severity(kind))),
       )
-    _ -> state
+    _ ->
+      State(
+        ..state,
+        dropped: Some(worse(state.dropped, diagnostic.severity(kind))),
+      )
   }
 }
 
@@ -450,23 +481,31 @@ fn header_step(
     )
     False -> {
       let line = read_line(source, size, pos)
-      let step = case
-        line.end - block_start > limits.max_header_bytes,
-        count + 1 > limits.max_header_lines
-      {
-        True, _ -> Fail(mime.LimitExceeded(mime.MaxHeaderBytes))
-        _, True -> Fail(mime.LimitExceeded(mime.MaxHeaderLines))
-        False, False ->
-          classify_header_line(
-            source,
-            size,
-            line,
-            stack,
-            current,
-            lines,
-            fields,
-            kinds,
-          )
+      let step =
+        classify_header_line(
+          source,
+          size,
+          line,
+          stack,
+          current,
+          lines,
+          fields,
+          kinds,
+        )
+      // Only lines that join the header block (fields, anomalies and
+      // continuations) count towards the limits; the separator and the line
+      // that starts the body do not.
+      let step = case step {
+        Continue(..) ->
+          case
+            line.end - block_start > limits.max_header_bytes,
+            count + 1 > limits.max_header_lines
+          {
+            True, _ -> Fail(mime.LimitExceeded(mime.MaxHeaderBytes))
+            _, True -> Fail(mime.LimitExceeded(mime.MaxHeaderLines))
+            False, False -> step
+          }
+        _ -> step
       }
       #(step, line.end)
     }
@@ -770,7 +809,9 @@ fn content_type(
             )
           case parsed {
             Some(content_type) -> #(content_type, state)
-            None -> #(default_content_type(False), state)
+            // An invalid type falls back to the default for this
+            // context, `message/rfc822` inside a digest.
+            None -> #(default, state)
           }
         }
       }
