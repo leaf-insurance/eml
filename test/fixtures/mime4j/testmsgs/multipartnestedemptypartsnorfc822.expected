@@ -1,0 +1,13 @@
+message
+  header 5
+  multipart
+    preamble "This is a multi-part message in MIME format.\r\n"
+    part
+      header 1
+      multipart
+        preamble "This is a nested multi-part message in MIME format.\r\n"
+        part
+          header 0
+          body ""
+        epilogue "\r\nNested epilogue"
+    epilogue "\r\nEpilogue\r\n"

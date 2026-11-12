@@ -1,0 +1,13 @@
+message
+  header 9
+  multipart
+    preamble "This is a multi-part message in MIME format.\n"
+    part
+      header 2
+      body "-- \nJuergen Specht - KULTURBOX\n"
+    part
+      header 3
+      message
+        header 23
+        body "Hallo Herr Specht,\nentschuldigen Sie vorab, dass ich Ihnen nicht telefonisch zur Verfuegung\nstehe, ich Praesentationen gehalten/ noch zu halten und viele\nKundennachfragen zu projektieren. Nach Informationen des Produkt-Managers\nTemme steht der POP schon zur Verf=FCgung! Standort: voraussichtlich:\nWinterfeldstr. 21, 10781 Berlin.\nDer POP hat zur Zeit direkte 34M-Anbindungen zu folgenden Orten: Rostock,\nHamburg, Hannover & Leipzig. 4 weitere werden in kuerze in Betrieb gehen.\nDamit haben Sie einen Besonderen Sicherheitsstandard verfuegbar!\nKontakt muessen Sie ueber Ihre oerltliche Vertriebseinheit aufnehmen:\nentweder den Geschaefts-Kunden-Vertrieb oder das GrossKundenManagement.\nDiese Vertriebseinheiten greifen auf den oertlichen Technischen\nVertriebs-Support zu. Die Informationen werden ueber TVS zur Vertriebseiheit\ngegeben und dann zu Ihnen.\n Sie benoetigen eine Standleitung von Ihrer Lokation zum Internet-POP\nUebergabepunkt zu Ihrem Info-Server ist ein CISCO 1000-Router. Dann zahlen\nSie neben den monatlichen Kosten fuer die Standleitung die Kosten fuer den\nInternet-Zugang: zB bei 64k: 1500DM bei 2GByte Freivolumen. 128K: 3000 DM\nbei 5 GB Freivolumen & 2M: 30.000 DM bei 50GB Freivolumen.\nFreundliche Gruesse=20\nGuenter Deuschle\n\n\n>Sehr geehrter Herr Deuschle,\n>Sie sind mir von Herrn Meyendriesch empfohlen worden.\n>Ich versuche Informationen ueber das T-eigene 34Mbit/s Netz und den=20\n>lokalen Pop-Berlin rauszufinden, bzw. was ein Anschluss kostet und=20\n>wo man ihn herbekommt. Laut Herrn Schnick in Berlin gibt es den=20\n>T-Pop nicht, laut Traceroute von Herrn Meyendriesch sehrwohl. Auch=20\n>ist dies Netz in der IX vom Mai 96 erwaehnt.\n>Koennen Sie mir helfen?\n>\n>MfG\n>--=20\n>Juergen Specht - KULTURBOX\n>\n>\n\n=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=\n=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=\n=3D\nDipl.-Ing.  Guenter     D E U S C H L E\nDeutsche Telekom AG     Niederlassung 3 Hannover\nGrossKundenManagement - Techn. Vertriebs-Support:\nTeam-Leiter             Internet Online-Dienste\n---------------------------------------------------\nGrKM-TVS-IOD           Tel: +49-511-333-2772\nVahrenwalder-Str. 245  FAX: +49-511-333-2751\n30179 Hannover       eMail: deuschle@mnh.telekom.de=20\n=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=\n=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=\n=3D\n\n\n\n"
+    epilogue "\n\n\n"

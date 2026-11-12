@@ -1,0 +1,11 @@
+message
+  header 1
+  multipart
+    preamble "preamble\r\n"
+    part
+      header 1
+      body "first part\r\n"
+    part
+      header 1
+      body "from the rfc:\r\n================================\r\nencapsulation := delimiter transport-padding\r\n                      CRLF body-part\r\n================================\r\nand also\r\n================================\r\n\"Composers MUST NOT generate non-zero length transport\r\npadding, but receivers MUST be able to handle padding\r\nadded by message transports.\"\r\n================================\r\n\r\nsecond part have a start boundary ending with spaces\r\nand also have a boundary not at the beginning\r\n --boundary\r\n... that should be ignored\r\n\r\nalso a boundary with more data (a tab) shoud be ignored\r\n --boundary\t\r\n \r\nend of part\r\n"
+    epilogue "epilouge"

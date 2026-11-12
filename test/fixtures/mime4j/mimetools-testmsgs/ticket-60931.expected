@@ -1,0 +1,9 @@
+message
+  header 3
+  multipart
+    part
+      header 1
+      body "HELLO\n"
+    part
+      header 1
+      body "HELLO<br>\n"

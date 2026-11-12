@@ -1,0 +1,10 @@
+message
+  header 2
+  multipart
+    preamble "This is a multi-part message in MIME format."
+    part
+      header 2
+      body "Attachment Test\n"
+    part
+      header 3
+      body "VGVzdAo="

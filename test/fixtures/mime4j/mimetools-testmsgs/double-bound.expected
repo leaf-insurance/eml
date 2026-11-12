@@ -1,0 +1,35 @@
+message
+  header 10
+  multipart
+    preamble "This is a multi-part message in MIME format.\r\n"
+    part
+      header 0
+      body ""
+    part
+      header 3
+      body "<p>This message contains double boundaries all over the\r\nplace.  We want to make sure that bad things don't happen.\r\n\r\n<p>One bad thing is that the doubled-boundary above can\r\nbe mistaken for a single boundary plus a bogus premature\r\nend of headers.\r\n"
+    part
+      header 0
+      body ""
+    part
+      header 2
+      body "<p>Hello?  Am I here?\r\n"
+    part
+      header 0
+      body ""
+    part
+      header 2
+      body "<p>Hello?  Am I here?\r\n"
+    part
+      header 2
+      body ""
+    part
+      header 2
+      body ""
+    part
+      header 2
+      body ""
+    part
+      header 3
+      body "R0lGODdhKAAoAPMAAAAAAAAAzN3u/76+voiIiG5ubszd7v///+fn5wAAAAAAAAAAAAAAAAAA\r\nAAAAAAAAACwAAAAAKAAoAAAE/hDJSau9eJbMOy4bMoxkaZ5oCkoD6L5wLMfiWns41oZt7lM7\r\nVujnC96IRVsPWQE4nxPjkvmsQmu8oc/KBUSVWk7XepGGLeNrxoxJO1MjILjthg/kWXQ6wO/7\r\n+3dCeRRjfAKHiImJAV+DCF0BiW5VAo1CElaRh5NjlkeYmpyTgpcTAKGiaaSfpwKpVQaxVatL\r\nrU8GaQdOBAQAB7+yXliXTrgAxsW4vFabv8BOtBsBt7cGvwCIT9nOyNEIxuC4zrqKzc9XbODJ\r\nvs7Y5ewH3d7Fxe3jB4rj8t6PuNa6r2bhKQXN17FYCBMqTGiBzSNhx5g0nEMhlsSJjiRYvDjw\r\nE0cdGxQ/gswosoKUkmuU2FnJcsSKGTBjypxJsyaICAA7"
+    epilogue "\r\n\r\n"

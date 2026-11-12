@@ -1,0 +1,7 @@
+message
+  header 1
+  multipart
+    part
+      header 1
+      body "This should be a text including the --boundary\r\nstring and should not be parsed as multiple bodies\r\n"
+    epilogue "epilouge\r\n"

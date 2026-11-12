@@ -1,0 +1,4 @@
+message
+  header 1
+  multipart
+    preamble "AAA\r\n\r\n"

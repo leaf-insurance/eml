@@ -1,0 +1,7 @@
+message
+  header 9
+  message
+    header 9
+    message
+      header 10
+      body "This is the original message.\r\nLet's see if we can embed it!\r\n"

@@ -1,0 +1,14 @@
+message
+  header 5
+  multipart
+    preamble "This is the preamble.  It is to be ignored, though it\nis a handy place for mail composers to include an\nexplanatory note to non-MIME conformant readers."
+    part
+      header 1
+      body ""
+    part
+      header 1
+      body "This is explicitly typed plain ASCII text.\nIt DOES end with a linebreak.\n\n"
+    part
+      header 1
+      body "This is explicitly typed plain ASCII text.\nIt DOES end with a linebreak.\n"
+    epilogue "This is the epilogue.  It is also to be ignored.\n\n"

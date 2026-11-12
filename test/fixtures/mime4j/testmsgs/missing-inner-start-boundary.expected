@@ -1,0 +1,12 @@
+message
+  header 1
+  multipart
+    preamble "Outer preamble\r\n"
+    part
+      header 1
+      body "Foo\r\n"
+    part
+      header 1
+      multipart
+        preamble "AAA\r\n"
+    epilogue "Outer epilouge\r\n"

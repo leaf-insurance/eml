@@ -1,0 +1,3 @@
+message
+  header 4
+  body "7bit content with euro =A4 symbol=20\r\n"

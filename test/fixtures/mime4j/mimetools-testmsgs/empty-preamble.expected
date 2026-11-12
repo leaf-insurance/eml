@@ -1,0 +1,9 @@
+message
+  header 2
+  multipart
+    part
+      header 3
+      body "Das ist ein Test.\n--=20\nsub i($){print$_[0]}*j=3D*ENV;sub w($){sleep$_[0]}sub _($){i\"$p:$c> \",w+01\n,$_=3D$_[0],tr;i-za-h,;a-hi-z ;,i$_,w+01,i\"\\n\"}$|=3D1;$f=3D'HO';($c=3D$j{PW=\nD})=3D~\ns+$j{$f.\"ME\"}+~+;$p.=3D\"$j{USER}\\@\".`hostname`;chop$p;_\"kl\",$c=3D'~',_\"zu,\".\n\"-zn,*\",_\"#,epg,lw,gwc,mfmkcbm,cvsvwev,uiqt,kwvbmvb?\",i\"$p:$c> \";w+1<<07\n"
+    part
+      header 3
+      body "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAsTAAALEwEAmpwY\nAAAAB3RJTUUH1AUbFQQ0Vbb7XQAAAB10RVh0Q29tbWVudABDcmVhdGVkIHdpdGggVGhlIEdJ\nTVDvZCVuAAAAFklEQVR42mP8//8/AwMDEwMDAwMDAwAkBgMB/umWrAAAAABJRU5ErkJggg==\n"

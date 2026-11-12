@@ -1,0 +1,3 @@
+message
+  header 6
+  body "This results in a bogus header.\r\n"

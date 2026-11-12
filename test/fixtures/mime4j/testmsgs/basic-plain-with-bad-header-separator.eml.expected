@@ -1,0 +1,3 @@
+message
+  header 6
+  body "This is a very simple message with a simple body but the separator\r\nbetween header and body contains an additional space: \r\nCRLF<space>CRLF.\r\n\r\nThis results in a bogus header.\r\n"

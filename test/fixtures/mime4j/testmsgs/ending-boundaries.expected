@@ -1,0 +1,7 @@
+message
+  header 1
+  multipart
+    part
+      header 1
+      body "first part\r\n"
+    epilogue "\r\nFrom the RFC about ending boundary:\r\n\r\n===================================================================\r\nNOTE TO IMPLEMENTORS:  Boundary string comparisons must compare the\r\nboundary value with the beginning of each candidate line.  An exact\r\nmatch of the entire candidate line is not required; it is sufficient\r\nthat the boundary appear in its entirety following the CRLF.\r\n===================================================================\r\n\r\n--boundary--\r\n\r\nThe above boundary should be part of the epilogue, too."

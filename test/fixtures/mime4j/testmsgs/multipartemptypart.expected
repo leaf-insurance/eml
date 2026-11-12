@@ -1,0 +1,8 @@
+message
+  header 5
+  multipart
+    preamble "This is a multi-part message in MIME format.\r\n"
+    part
+      header 0
+      body ""
+    epilogue "\r\nEpilogue\r\n"

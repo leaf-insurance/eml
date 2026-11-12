@@ -1,0 +1,3 @@
+message
+  header 10
+  body "=0A=\nHallo,=0A=\n=0A=\ndas ist eine Testnachricht mit 8 Bit S=F6nderz=E4ichen, und obendrein noch=\n=20=0A=\nquoted-printable kodiert.=0A=\n=0A=\nGr=FC=DFe,=0A=\n=0A=\nJ=F6rn=0A=\n\n--=20=0A=\n .''`.  J=F6rn Reder <joern@zyn.de>=0A=\n: :' :  http://www.exit1.org/ http://www.zyn.de/=0A=\n`. `'=0A=\n  `-    Debian GNU/Linux -- The power of freedom=0A=\n"

@@ -1,0 +1,3 @@
+message
+  header 6
+  body "This had better not end up in /tmp!\n"

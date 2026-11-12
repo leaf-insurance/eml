@@ -1,0 +1,11 @@
+message
+  header 2
+  multipart
+    preamble "Preamble\n"
+    part
+      header 1
+      body "The better part\n"
+    part
+      header 1
+      body "The worse part\n"
+    epilogue "\n"
