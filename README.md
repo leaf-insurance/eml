@@ -49,8 +49,10 @@ Milestones 1 and 2 are done:
 - framing (CRLF, LF and CR line endings, BOM, mbox `From ` line), header
   blocks kept losslessly, the MIME tree, and base64 and quoted-printable
   decoding;
-- charsets: UTF-8 and the 28 WHATWG single-byte encodings, with a
-  caller-supplied decoder for others (CJK, UTF-16);
+- charsets: every encoding of the WHATWG Encoding Standard, through the
+  pure Gleam `text_encoding` package: UTF-8, UTF-16, the
+  28 single-byte encodings, and the Chinese, Japanese and Korean encodings;
+  a caller-supplied decoder can handle others (UTF-7, EBCDIC, ...);
 - header text with RFC 2047 encoded-words (`eml.subject`,
   `eml.header_text`);
 - addresses (`eml.from`, `eml.addresses`, `eml/address`);

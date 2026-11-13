@@ -3,6 +3,7 @@
 import eml/charset
 import eml/diagnostic
 import eml/encoded_word
+import gleam/list
 
 fn decode(value: BitArray) {
   encoded_word.decode(value, charset.default_options())
@@ -60,8 +61,30 @@ pub fn malformed_b_word_is_kept_test() {
 }
 
 pub fn unsupported_charset_is_kept_test() {
-  assert decode(<<"=?shift_jis?B?gqA=?=">>)
-    == #("=?shift_jis?B?gqA=?=", [diagnostic.UnsupportedCharset("shift_jis")])
+  assert decode(<<"=?iso-2022-kr?B?gqA=?=">>)
+    == #("=?iso-2022-kr?B?gqA=?=", [
+      diagnostic.UnsupportedCharset("iso-2022-kr"),
+    ])
+}
+
+pub fn cjk_word_test() {
+  assert decode(<<"=?shift_jis?B?gqA=?=">>) == #("あ", [])
+  assert decode(<<"=?ISO-2022-JP?B?GyRCJCIbKEI=?=">>) == #("あ", [])
+}
+
+/// A double-byte character split between two words is repaired in a
+/// stateless multi-byte charset.
+pub fn split_double_byte_character_test() {
+  assert decode(<<"=?shift_jis?B?gg==?= =?shift_jis?B?oA==?=">>)
+    == #("あ", [diagnostic.EncodedWordSplitCharacter])
+}
+
+/// ISO-2022-JP is stateful: its words are never joined.
+pub fn no_repair_for_iso_2022_jp_test() {
+  let #(text, kinds) =
+    decode(<<"=?iso-2022-jp?Q?=1B$B$?= =?iso-2022-jp?Q?=22=1B(B?=">>)
+  assert text != "あ"
+  assert !list.contains(kinds, diagnostic.EncodedWordSplitCharacter)
 }
 
 pub fn not_an_encoded_word_test() {

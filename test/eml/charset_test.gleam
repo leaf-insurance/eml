@@ -84,13 +84,38 @@ pub fn utf8_replacement_test() {
   assert replaced(<<0xC3, 0xA9, 0xE2, 0x82, 0xAC>>) == #(Ok("é€"), [])
 }
 
+/// WHATWG "replacement" labels would decode to a single U+FFFD, losing the
+/// text, so they are reported as unsupported instead.
 pub fn unsupported_test() {
-  assert decode(<<0x82, 0xA0>>, "Shift_JIS")
-    == #(Error(Nil), [diagnostic.UnsupportedCharset("shift_jis")])
   assert decode(<<"a">>, "iso-2022-kr")
     == #(Error(Nil), [diagnostic.UnsupportedCharset("iso-2022-kr")])
-  assert decode(<<"a">>, "ks_c_5601-1987")
-    == #(Error(Nil), [diagnostic.UnsupportedCharset("ks_c_5601-1987")])
+  assert decode(<<"a">>, "hz-gb-2312")
+    == #(Error(Nil), [diagnostic.UnsupportedCharset("hz-gb-2312")])
+}
+
+/// The CJK encodings are decoded by text_encoding.
+pub fn cjk_test() {
+  assert decode(<<0x82, 0xA0>>, "Shift_JIS") == #(Ok("あ"), [])
+  assert decode(<<0xB0, 0xA1>>, "ks_c_5601-1987") == #(Ok("가"), [])
+  assert decode(<<0xC4, 0xE3>>, "gb2312") == #(Ok("你"), [])
+  assert decode(<<0xA4, 0x40>>, "big5") == #(Ok("一"), [])
+  assert decode(<<0xA4, 0xA2>>, "euc-jp") == #(Ok("あ"), [])
+  assert decode(<<0x1B, "$B$\"", 0x1B, "(B">>, "iso-2022-jp") == #(Ok("あ"), [])
+  assert decode(<<0x82, 0xFF, 0x82>>, "shift_jis")
+    == #(Ok("\u{FFFD}\u{FFFD}"), [diagnostic.MalformedCharsetData(2)])
+}
+
+/// UTF-16: a byte order mark decides, and "utf-16" without one is
+/// big-endian, as RFC 2781 says (WHATWG would choose little-endian).
+pub fn utf16_test() {
+  assert decode(<<0, 0x41>>, "utf-16be") == #(Ok("A"), [])
+  assert decode(<<0x41, 0>>, "utf-16le") == #(Ok("A"), [])
+  assert decode(<<0xFF, 0xFE, 0x41, 0>>, "utf-16le") == #(Ok("A"), [])
+  assert decode(<<0, 0x41>>, "utf-16") == #(Ok("A"), [])
+  assert decode(<<0xFE, 0xFF, 0, 0x41>>, "utf-16") == #(Ok("A"), [])
+  assert decode(<<0xFF, 0xFE, 0x41, 0>>, "utf-16") == #(Ok("A"), [])
+  assert decode(<<0x41>>, "utf-16be")
+    == #(Ok("\u{FFFD}"), [diagnostic.MalformedCharsetData(1)])
 }
 
 pub fn custom_decoder_test() {

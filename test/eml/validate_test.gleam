@@ -25,9 +25,9 @@ pub fn decode_problems_are_included_test() {
 
 pub fn charset_problems_are_included_test() {
   let message =
-    support.parse("Content-Type: text/plain; charset=shift_jis\r\n\r\nx")
+    support.parse("Content-Type: text/plain; charset=iso-2022-kr\r\n\r\nx")
   assert list.map(eml.diagnose(message), fn(d) { d.kind })
-    == [diagnostic.UnsupportedCharset("shift_jis")]
+    == [diagnostic.UnsupportedCharset("iso-2022-kr")]
 }
 
 pub fn threshold_test() {

@@ -77,7 +77,11 @@ const rtf =
 pub fn every_fixture_parses_test() {
   let assert Ok(files) = simplifile.read_directory(dir)
   let files =
-    list.filter(files, fn(file) { file != "LICENSE" && file != "MANIFEST.md" })
+    list.filter(files, fn(file) {
+      file != "LICENSE"
+      && file != "MANIFEST.md"
+      && !string.ends_with(file, ".expected")
+    })
   assert list.length(files) == 31
   list.each(files, fn(file) {
     let message = load(file)
@@ -283,16 +287,13 @@ pub fn unicode_body_test() {
 }
 
 pub fn gb2312_test() {
-  // GB2312 (GBK) is not built in: the text is not decoded, and the
-  // encoded-words are kept literally.
+  // GB2312 is decoded as GBK.
   let entity = root("chinesemail")
   let #(decoded, diagnostics) = eml.decode_text(entity)
-  assert decoded == Error(Nil)
-  assert list.map(diagnostics, fn(d) { d.kind })
-    == [diagnostic.UnsupportedCharset("gb2312")]
-  let assert mime.Single(subject) = eml.subject(entity)
-  assert string.starts_with(subject, "=?GB2312?B?")
-  // A caller-supplied decoder is used instead.
+  assert decoded == Ok(expected("chinesemail.text"))
+  assert diagnostics == []
+  assert eml.subject(entity) == mime.Single(expected("chinesemail.subject"))
+  // A caller-supplied decoder is consulted first.
   let options =
     charset.default_options()
     |> charset.with_decoder(fn(label, _) {
@@ -308,11 +309,16 @@ pub fn shift_jis_test() {
   let entity = root("shift-jismail")
   assert shape(entity) == "multipart/alternative[text/plain]"
   let #(decoded, diagnostics) = eml.decode_text(part(entity, 0))
-  assert decoded == Error(Nil)
-  assert list.map(diagnostics, fn(d) { d.kind })
-    == [diagnostic.UnsupportedCharset("shift_jis")]
-  let assert mime.Single(subject) = eml.subject(entity)
-  assert string.starts_with(subject, "=?ISO-2022-JP?B?")
+  assert decoded == Ok(expected("shift-jismail.text"))
+  assert diagnostics == []
+  assert eml.subject(entity) == mime.Single(expected("shift-jismail.subject"))
+}
+
+/// Text decoded independently of eml, by dev/cjk_expectations.py.
+fn expected(name: String) -> String {
+  let assert Ok(text) =
+    simplifile.read("test/fixtures/gen_smtp/" <> name <> ".expected")
+  text
 }
 
 pub fn testcase1_test() {

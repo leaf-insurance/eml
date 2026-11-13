@@ -85,8 +85,8 @@ pub fn comma_in_encoded_display_name_test() {
 
 /// pi-M5: display name decoding problems are reported.
 pub fn display_name_diagnostics_test() {
-  let #(_, kinds) = addresses(<<"=?shift_jis?B?gqA=?= <a@b.test>">>)
-  assert list.contains(kinds, diagnostic.UnsupportedCharset("shift_jis"))
+  let #(_, kinds) = addresses(<<"=?iso-2022-kr?B?gqA=?= <a@b.test>">>)
+  assert list.contains(kinds, diagnostic.UnsupportedCharset("iso-2022-kr"))
 }
 
 /// pi-M8, fable-F07: the same identity on both targets.
@@ -163,8 +163,10 @@ pub fn extended_value_diagnostics_test() {
     == #(parameter.Resolved("ÿ"), [diagnostic.UnknownCharset("x-unknown")])
   assert resolve("filename*=utf-8''%FF")
     == #(parameter.Resolved("\u{FFFD}"), [diagnostic.MalformedCharsetData(1)])
+  assert resolve("filename*=iso-2022-kr''%82%A0")
+    == #(parameter.Unsupported, [diagnostic.UnsupportedCharset("iso-2022-kr")])
   assert resolve("filename*=shift_jis''%82%A0")
-    == #(parameter.Unsupported, [diagnostic.UnsupportedCharset("shift_jis")])
+    == #(parameter.Resolved("あ"), [])
 }
 
 /// pi-M7: a duplicated section index is ambiguous, even with the same
@@ -367,11 +369,11 @@ pub fn validation_after_truncation_test() {
 pub fn header_problems_are_diagnosed_test() {
   let message =
     support.parse(
-      "From: a@b c@d\r\nSubject: =?iso-2022-jp?B?GyRCJCIbKEI=?=\r\n\r\nbody",
+      "From: a@b c@d\r\nSubject: =?iso-2022-kr?B?GyRCJCIbKEI=?=\r\n\r\nbody",
     )
   let kinds = list.map(eml.diagnose(message), fn(d) { d.kind })
   assert list.contains(kinds, diagnostic.InvalidAddress)
-  assert list.contains(kinds, diagnostic.UnsupportedCharset("iso-2022-jp"))
+  assert list.contains(kinds, diagnostic.UnsupportedCharset("iso-2022-kr"))
   let assert Error(_) = eml.validate(message, diagnostic.Warning)
 }
 
@@ -411,7 +413,7 @@ pub fn accessors_with_charset_options_test() {
     charset.default_options()
     |> charset.with_decoder(fn(label, _) {
       case label {
-        "iso-2022-jp" -> Ok("件名")
+        "iso-2022-jp" -> Ok("custom")
         _ -> Error(Nil)
       }
     })
@@ -421,11 +423,10 @@ pub fn accessors_with_charset_options_test() {
       <> "From: =?iso-2022-jp?B?GyRCN29MPhsoQg==?= <a@b.test>\r\n"
       <> "Content-Disposition: attachment; filename*=iso-2022-jp''%1B%24B\r\n\r\n",
     )
-  assert eml.subject_with(entity, options) == mime.Single("件名")
+  assert eml.subject_with(entity, options) == mime.Single("custom")
   assert eml.addresses_with(entity, "from", options)
-    == mime.Single([Individual(Mailbox(Some("件名"), "a", Some("b.test")))])
-  assert eml.filename_with(entity, options) == Some("件名")
-  // Without the decoder, the word is kept literally.
-  assert eml.subject(entity)
-    == mime.Single("=?iso-2022-jp?B?GyRCN29MPhsoQg==?=")
+    == mime.Single([Individual(Mailbox(Some("custom"), "a", Some("b.test")))])
+  assert eml.filename_with(entity, options) == Some("custom")
+  // Without the decoder, the built-in ISO-2022-JP decoder is used.
+  assert eml.subject(entity) == mime.Single("件名")
 }

@@ -30,10 +30,12 @@ Deliberate deviations from gen_smtp, where gen_smtp raised an error:
 
 Since M2, the decoded Subject of `malformed-folded-multibyte-header.eml`,
 the filenames in `utf-attachment-name.eml`, and the text of
-`unicode-subject.eml` and `unicode-body.eml` are asserted too. `chinesemail`
-(GB2312) and `shift-jismail` (Shift_JIS, ISO-2022-JP) use charsets that are
-not built in: their text is reported as `UnsupportedCharset`, and the tests
-check that a caller-supplied decoder is used instead.
+`unicode-subject.eml` and `unicode-body.eml` are asserted too. The text and
+Subject of `chinesemail` (GB2312) and `shift-jismail` (Shift_JIS,
+ISO-2022-JP) are compared with `NAME.text.expected` and
+`NAME.subject.expected`, written by `dev/cjk_expectations.py`, which decodes
+them independently of eml: the transfer encoding with Python's `email`
+package and the charset with encoding_rs (text_encoding's `dev/oracle`).
 
 ## Files (SHA-256)
 
