@@ -33,6 +33,7 @@ import eml/internal/utf8
 import gleam/bit_array
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 
 pub type Mailbox {
@@ -452,7 +453,7 @@ fn address(
         | [Token(Special(62), _, _), ..], Ok(#(local, domain))
         -> {
           let #(name, kinds) = case comment {
-            Some(text) -> comment_name(text, context)
+            Some(text) -> decoded_name(text, context)
             None -> #(None, [])
           }
           #(Individual(Mailbox(name, local, domain)), after_domain, kinds)
@@ -672,7 +673,7 @@ fn spec(
         Some(domain) ->
           case list.filter(domain, not_comment) {
             [Token(Literal(bytes), _, _)] ->
-              identity(bytes) |> result_map(fn(d) { #(local, Some(d)) })
+              identity(bytes) |> result.map(fn(d) { #(local, Some(d)) })
             domain ->
               case dotted(domain, False, []) {
                 Ok(domain) -> Ok(#(local, Some(domain)))
@@ -680,13 +681,6 @@ fn spec(
               }
           }
       }
-    Error(_) -> Error(Nil)
-  }
-}
-
-fn result_map(result: Result(a, Nil), f: fn(a) -> b) -> Result(b, Nil) {
-  case result {
-    Ok(a) -> Ok(f(a))
     Error(_) -> Error(Nil)
   }
 }
@@ -753,15 +747,13 @@ fn display_name(
         })
         |> list.reverse
         |> bit_array.concat
-      case encoded_word.decode(bytes, context.options) {
-        #("", kinds) -> #(None, kinds)
-        #(name, kinds) -> #(Some(name), kinds)
-      }
+      decoded_name(bytes, context)
     }
   }
 }
 
-fn comment_name(
+/// Decodes a display name, which is absent when it decodes to nothing.
+fn decoded_name(
   text: BitArray,
   context: Context,
 ) -> #(Option(String), List(Kind)) {

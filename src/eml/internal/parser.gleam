@@ -112,7 +112,10 @@ pub fn parse(source: BitArray, limits: Limits) -> Result(Parsed, ParseError) {
     )
     _ -> #(None, 0, state)
   }
-  use <- guard(all_whitespace(slice(source, pos, -1)), mime.EmptyInput)
+  use <- guard(
+    structured.skip_whitespace(slice(source, pos, -1)) == <<>>,
+    mime.EmptyInput,
+  )
   let #(envelope, pos) = envelope(source, size, pos)
   use #(root, _end, _stop, state) <- result.try(parse_entity(
     source,
@@ -145,15 +148,6 @@ fn guard(
   case condition {
     True -> Error(error)
     False -> continue()
-  }
-}
-
-fn all_whitespace(bits: BitArray) -> Bool {
-  case bits {
-    <<c, rest:bytes>> if c == 32 || c == 9 || c == 13 || c == 10 ->
-      all_whitespace(rest)
-    <<>> -> True
-    _ -> False
   }
 }
 
@@ -399,7 +393,6 @@ type Step {
     body_start: Int,
     kinds: List(#(Kind, Option(Span))),
   )
-  Fail(ParseError)
 }
 
 fn header_loop(
@@ -415,63 +408,7 @@ fn header_loop(
   count: Int,
   kinds: List(#(Kind, Option(Span))),
 ) -> Result(HeaderBlock, ParseError) {
-  let #(step, next) =
-    header_step(
-      source,
-      size,
-      block_start,
-      pos,
-      stack,
-      limits,
-      current,
-      lines,
-      fields,
-      count,
-      kinds,
-    )
-  case step {
-    Continue(current:, lines:, fields:, kinds:) ->
-      header_loop(
-        source,
-        size,
-        block_start,
-        next,
-        stack,
-        limits,
-        current,
-        lines,
-        fields,
-        count + 1,
-        kinds,
-      )
-    Finish(separator:, body_start:, kinds:) ->
-      Ok(HeaderBlock(
-        lines: list.reverse(close_record(source, current, lines)),
-        fields:,
-        separator:,
-        body_start:,
-        kinds: list.reverse(kinds),
-      ))
-    Fail(error) -> Error(error)
-  }
-}
-
-/// Classifies the line at `pos` and returns the step, with the position of
-/// the next line.
-fn header_step(
-  source: BitArray,
-  size: Int,
-  block_start: Int,
-  pos: Int,
-  stack: List(BitArray),
-  limits: Limits,
-  current: Option(Record),
-  lines: List(HeaderLine),
-  fields: Int,
-  count: Int,
-  kinds: List(#(Kind, Option(Span))),
-) -> #(Step, Int) {
-  case pos >= size {
+  let #(step, next) = case pos >= size {
     True -> #(
       Finish(None, size, [
         #(diagnostic.NoBlankLineAfterHeaders, Some(Span(size, size))),
@@ -492,23 +429,39 @@ fn header_step(
           fields,
           kinds,
         )
-      // Only lines that join the header block (fields, anomalies and
-      // continuations) count towards the limits; the separator and the line
-      // that starts the body do not.
-      let step = case step {
-        Continue(..) ->
-          case
-            line.end - block_start > limits.max_header_bytes,
-            count + 1 > limits.max_header_lines
-          {
-            True, _ -> Fail(mime.LimitExceeded(mime.MaxHeaderBytes))
-            _, True -> Fail(mime.LimitExceeded(mime.MaxHeaderLines))
-            False, False -> step
-          }
-        _ -> step
-      }
       #(step, line.end)
     }
+  }
+  // Only lines that join the header block (fields, anomalies and
+  // continuations) count towards the limits; the separator and the line
+  // that starts the body do not.
+  case step {
+    Continue(..) if next - block_start > limits.max_header_bytes ->
+      Error(mime.LimitExceeded(mime.MaxHeaderBytes))
+    Continue(..) if count + 1 > limits.max_header_lines ->
+      Error(mime.LimitExceeded(mime.MaxHeaderLines))
+    Continue(current:, lines:, fields:, kinds:) ->
+      header_loop(
+        source,
+        size,
+        block_start,
+        next,
+        stack,
+        limits,
+        current,
+        lines,
+        fields,
+        count + 1,
+        kinds,
+      )
+    Finish(separator:, body_start:, kinds:) ->
+      Ok(HeaderBlock(
+        lines: list.reverse(close_record(current, lines)),
+        fields:,
+        separator:,
+        body_start:,
+        kinds: list.reverse(kinds),
+      ))
   }
 }
 
@@ -551,8 +504,12 @@ fn classify_header_line(
         False, _ ->
           case is_field(source, line) {
             Ok(#(name_end, colon)) -> {
-              let lines = close_record(source, current, lines)
-              let name = ascii_name(slice(source, line.start, name_end))
+              let lines = close_record(current, lines)
+              let name =
+                result.unwrap(
+                  bit_array.to_string(slice(source, line.start, name_end)),
+                  "",
+                )
               let kinds = case colon > name_end {
                 True -> [
                   #(diagnostic.SpaceBeforeColon, Some(Span(name_end, colon))),
@@ -568,7 +525,7 @@ fn classify_header_line(
                 True ->
                   Continue(
                     Some(AnomalyRecord(line.start, line)),
-                    close_record(source, current, lines),
+                    close_record(current, lines),
                     fields,
                     [
                       #(
@@ -625,7 +582,6 @@ fn extend(record: Record, line: Line) -> Record {
 }
 
 fn close_record(
-  _source: BitArray,
   record: Option(Record),
   lines: List(HeaderLine),
 ) -> List(HeaderLine) {
@@ -647,13 +603,6 @@ fn close_record(
   }
 }
 
-fn ascii_name(bits: BitArray) -> String {
-  case bit_array.to_string(bits) {
-    Ok(name) -> name
-    Error(_) -> ""
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Entities
 
@@ -664,37 +613,47 @@ fn default_content_type(digest: Bool) -> ContentType {
   }
 }
 
-/// The value of the first field with the given lowercase name, unfolded, and
-/// how many such fields there are.
+/// The value of the first field with the given lowercase name, unfolded,
+/// and its span. More than one such field is reported.
 fn first_field(
   source: BitArray,
-  lines: List(HeaderLine),
+  block: HeaderBlock,
   name: String,
-) -> #(Option(#(BitArray, Span)), Int) {
-  list.fold(lines, #(None, 0), fn(acc, line) {
-    case line {
-      FieldLine(name: field_name, value_span:, span:, ..) ->
-        case string.lowercase(field_name) == name {
-          False -> acc
-          True ->
-            case acc.0 {
-              None -> #(
-                Some(#(
-                  structured.unfold(slice(
-                    source,
-                    value_span.start,
-                    value_span.end,
+  path: List(Int),
+  state: State,
+) -> #(Option(#(BitArray, Span)), State) {
+  let #(first, count) =
+    list.fold(block.lines, #(None, 0), fn(acc, line) {
+      case line {
+        FieldLine(name: field_name, value_span:, span:, ..) ->
+          case string.lowercase(field_name) == name {
+            False -> acc
+            True ->
+              case acc.0 {
+                None -> #(
+                  Some(#(
+                    structured.unfold(slice(
+                      source,
+                      value_span.start,
+                      value_span.end,
+                    )),
+                    span,
                   )),
-                  span,
-                )),
-                1,
-              )
-              Some(_) -> #(acc.0, acc.1 + 1)
-            }
-        }
-      AnomalyLine(_) -> acc
-    }
-  })
+                  1,
+                )
+                Some(_) -> #(acc.0, acc.1 + 1)
+              }
+          }
+        AnomalyLine(_) -> acc
+      }
+    })
+  case first, count > 1 {
+    Some(#(_, span)), True -> #(
+      first,
+      push(state, diagnostic.DuplicateField(name), path, Some(span)),
+    )
+    _, _ -> #(first, state)
+  }
 }
 
 fn parse_entity(
@@ -721,7 +680,7 @@ fn parse_entity(
     0, Embedded -> {
       // Not a message: the whole region is opaque. Diagnostics from the
       // failed header block are not reported.
-      let #(end, stop) = scan_body(source, size, start, start, start, stack)
+      let #(end, stop) = scan_body(source, size, start, stack)
       let node =
         Node(
           path:,
@@ -783,19 +742,9 @@ fn content_type(
   path: List(Int),
   state: State,
 ) -> #(ContentType, State) {
-  case first_field(source, block.lines, "content-type") {
-    #(None, _) -> #(default, state)
-    #(Some(#(value, span)), count) -> {
-      let state = case count > 1 {
-        True ->
-          push(
-            state,
-            diagnostic.DuplicateField("content-type"),
-            path,
-            Some(span),
-          )
-        False -> state
-      }
+  case first_field(source, block, "content-type", path, state) {
+    #(None, state) -> #(default, state)
+    #(Some(#(value, span)), state) -> {
       case structured.skip_cfws(value) {
         // An empty value counts as absent.
         <<>> -> #(default, state)
@@ -825,19 +774,9 @@ fn transfer_encoding(
   path: List(Int),
   state: State,
 ) -> #(TransferEncoding, State) {
-  case first_field(source, block.lines, "content-transfer-encoding") {
-    #(None, _) -> #(mime.SevenBit, state)
-    #(Some(#(value, span)), count) -> {
-      let state = case count > 1 {
-        True ->
-          push(
-            state,
-            diagnostic.DuplicateField("content-transfer-encoding"),
-            path,
-            Some(span),
-          )
-        False -> state
-      }
+  case first_field(source, block, "content-transfer-encoding", path, state) {
+    #(None, state) -> #(mime.SevenBit, state)
+    #(Some(#(value, span)), state) -> {
       let #(encoding, kinds) = structured.parse_transfer_encoding(value)
       let state =
         push_all(state, list.map(kinds, fn(kind) { #(kind, Some(span)) }), path)
@@ -867,17 +806,17 @@ fn body(
   state: State,
 ) -> Result(#(NodeBody, TransferEncoding, Int, Stop, State), ParseError) {
   let here = Some(Span(body_start, body_start))
+  let identity = is_identity(encoding)
   case content_type.type_, content_type.subtype {
     "multipart", subtype -> {
-      let state = case is_identity(encoding) {
+      let state = case identity {
         True -> state
         False -> push(state, diagnostic.EncodedMultipart, path, here)
       }
       let #(boundary, state) = boundary(content_type, path, here, state)
       case boundary {
         None -> {
-          let #(end, stop) =
-            scan_body(source, size, body_start, body_start, body_start, stack)
+          let #(end, stop) = scan_body(source, size, body_start, stack)
           let reason = case list.key_find(content_type.parameters, "boundary") {
             Ok(_) -> mime.BadBoundary
             Error(_) -> mime.NoBoundary
@@ -900,47 +839,36 @@ fn body(
         }
       }
     }
-    "message", "rfc822" | "message", "global" ->
-      case is_identity(encoding) {
-        True -> {
-          use #(child, end, stop, child_state) <- result.try(parse_entity(
-            source,
-            size,
-            body_start,
-            list.append(path, [0]),
-            depth + 1,
-            stack,
-            default_content_type(False),
-            Embedded,
-            state,
-          ))
-          case child.body {
-            NodeOpaque(mime.NotMessage) -> {
-              let state = push(state, diagnostic.NotAMessage, path, here)
-              Ok(#(NodeOpaque(mime.NotMessage), encoding, end, stop, state))
-            }
-            _ -> Ok(#(NodeEmbedded(child), encoding, end, stop, child_state))
-          }
+    "message", "rfc822" | "message", "global" if identity -> {
+      use #(child, end, stop, child_state) <- result.try(parse_entity(
+        source,
+        size,
+        body_start,
+        list.append(path, [0]),
+        depth + 1,
+        stack,
+        default_content_type(False),
+        Embedded,
+        state,
+      ))
+      case child.body {
+        NodeOpaque(mime.NotMessage) -> {
+          let state = push(state, diagnostic.NotAMessage, path, here)
+          Ok(#(NodeOpaque(mime.NotMessage), encoding, end, stop, state))
         }
-        False -> {
-          let state = case encoding {
-            mime.Unknown(label) ->
-              push(state, diagnostic.UnknownTransferEncoding(label), path, here)
-            _ -> push(state, diagnostic.EncodedMessage, path, here)
-          }
-          let #(end, stop) =
-            scan_body(source, size, body_start, body_start, body_start, stack)
-          Ok(#(NodeLeaf, encoding, end, stop, state))
-        }
+        _ -> Ok(#(NodeEmbedded(child), encoding, end, stop, child_state))
       }
-    _, _ -> {
-      let state = case encoding {
-        mime.Unknown(label) ->
+    }
+    type_, subtype -> {
+      let state = case encoding, type_, subtype {
+        mime.Unknown(label), _, _ ->
           push(state, diagnostic.UnknownTransferEncoding(label), path, here)
-        _ -> state
+        // An encoded message is not parsed (§C.2).
+        _, "message", "rfc822" | _, "message", "global" ->
+          push(state, diagnostic.EncodedMessage, path, here)
+        _, _, _ -> state
       }
-      let #(end, stop) =
-        scan_body(source, size, body_start, body_start, body_start, stack)
+      let #(end, stop) = scan_body(source, size, body_start, stack)
       Ok(#(NodeLeaf, encoding, end, stop, state))
     }
   }
@@ -985,6 +913,15 @@ fn boundary(
 fn scan_body(
   source: BitArray,
   size: Int,
+  start: Int,
+  stack: List(BitArray),
+) -> #(Int, Stop) {
+  scan_loop(source, size, start, start, start, stack)
+}
+
+fn scan_loop(
+  source: BitArray,
+  size: Int,
   region_start: Int,
   pos: Int,
   previous_content_end: Int,
@@ -1001,7 +938,7 @@ fn scan_body(
             False -> #(pos, AtDelimiter(found))
           }
         None ->
-          scan_body(
+          scan_loop(
             source,
             size,
             region_start,
@@ -1047,50 +984,31 @@ fn multipart(
     False -> state
   }
   let inner = [boundary, ..stack]
-  let #(preamble_end, stop) =
-    scan_body(source, size, body_start, body_start, body_start, inner)
+  let #(preamble_end, stop) = scan_body(source, size, body_start, inner)
   case stop {
     AtDelimiter(Delimiter(owner: 0, ..) as found) -> {
       let state = trailing(state, found, path)
-      let preamble = Span(body_start, preamble_end)
       let delimiter = Span(preamble_end, found.line.end)
-      case found.close {
-        True -> {
-          let state =
-            push(state, diagnostic.CloseWithoutOpen, path, Some(delimiter))
-          let #(end, stop) = epilogue(source, size, found.line.end, stack)
-          Ok(#(
-            NodeMultipart(
-              boundary:,
-              preamble:,
-              delimiters: [delimiter],
-              parts: [],
-              closed: True,
-              epilogue: Span(found.line.end, end),
-            ),
-            end,
-            stop,
-            state,
-          ))
-        }
-        False ->
-          parts(
-            source,
-            size,
-            found.line.end,
-            path,
-            depth,
-            stack,
-            inner,
-            boundary,
-            digest,
-            preamble,
-            [delimiter],
-            [],
-            0,
-            state,
-          )
+      let state = case found.close {
+        True -> push(state, diagnostic.CloseWithoutOpen, path, Some(delimiter))
+        False -> state
       }
+      parts(
+        source,
+        size,
+        found,
+        path,
+        depth,
+        stack,
+        inner,
+        boundary,
+        digest,
+        Span(body_start, preamble_end),
+        [delimiter],
+        [],
+        0,
+        state,
+      )
     }
     _ -> {
       // No delimiter of our own before the entity ends.
@@ -1113,10 +1031,12 @@ fn trailing(state: State, found: Delimiter, path: List(Int)) -> State {
   }
 }
 
+/// Parses the part after the delimiter `found`, which is owned by this
+/// multipart, and the parts after it.
 fn parts(
   source: BitArray,
   size: Int,
-  part_start: Int,
+  found: Delimiter,
   path: List(Int),
   depth: Int,
   stack: List(BitArray),
@@ -1129,100 +1049,83 @@ fn parts(
   index: Int,
   state: State,
 ) -> Result(#(NodeBody, Int, Stop, State), ParseError) {
-  // A direct self-call (not through `result.try`), so that this loop over
-  // parts compiles to a loop on JavaScript.
-  case
-    parse_entity(
-      source,
-      size,
-      part_start,
-      list.append(path, [index]),
-      depth + 1,
-      inner,
-      default_content_type(digest),
-      Child,
-      state,
-    )
-  {
-    Error(error) -> Error(error)
-    Ok(#(node, end, stop, state)) -> {
-      let nodes = [node, ..nodes]
-      let unclosed = fn(end, stop, state) {
-        let state =
-          push(
-            state,
-            diagnostic.MissingCloseDelimiter,
-            path,
-            Some(Span(end, end)),
-          )
-        Ok(#(
-          NodeMultipart(
-            boundary:,
-            preamble:,
-            delimiters: list.reverse(delimiters),
-            parts: list.reverse(nodes),
-            closed: False,
-            epilogue: Span(end, end),
-          ),
-          end,
-          stop,
-          state,
-        ))
-      }
-      case stop {
-        AtEof -> unclosed(end, AtEof, state)
-        AtDelimiter(Delimiter(owner: 0, ..) as found) -> {
-          let state = trailing(state, found, path)
-          let delimiters = [Span(end, found.line.end), ..delimiters]
-          case found.close {
-            False ->
-              parts(
-                source,
-                size,
-                found.line.end,
-                path,
-                depth,
-                stack,
-                inner,
-                boundary,
-                digest,
-                preamble,
-                delimiters,
-                nodes,
-                index + 1,
-                state,
-              )
-            True -> {
-              let #(end, stop) = epilogue(source, size, found.line.end, stack)
-              Ok(#(
-                NodeMultipart(
-                  boundary:,
-                  preamble:,
-                  delimiters: list.reverse(delimiters),
-                  parts: list.reverse(nodes),
-                  closed: True,
-                  epilogue: Span(found.line.end, end),
-                ),
-                end,
-                stop,
-                state,
-              ))
-            }
-          }
-        }
-        AtDelimiter(_) -> unclosed(end, lift(stop), state)
-      }
+  case found.close {
+    True -> {
+      // The epilogue runs until an ancestor's delimiter or EOF. The closed
+      // multipart's own boundary is no longer on the stack.
+      let #(end, stop) = scan_body(source, size, found.line.end, stack)
+      Ok(#(
+        NodeMultipart(
+          boundary:,
+          preamble:,
+          delimiters: list.reverse(delimiters),
+          parts: list.reverse(nodes),
+          closed: True,
+          epilogue: Span(found.line.end, end),
+        ),
+        end,
+        stop,
+        state,
+      ))
     }
+    // A direct self-call (not through `result.try`), so that this loop over
+    // parts compiles to a loop on JavaScript.
+    False ->
+      case
+        parse_entity(
+          source,
+          size,
+          found.line.end,
+          list.append(path, [index]),
+          depth + 1,
+          inner,
+          default_content_type(digest),
+          Child,
+          state,
+        )
+      {
+        Error(error) -> Error(error)
+        Ok(#(node, end, AtDelimiter(Delimiter(owner: 0, ..) as found), state)) -> {
+          let state = trailing(state, found, path)
+          parts(
+            source,
+            size,
+            found,
+            path,
+            depth,
+            stack,
+            inner,
+            boundary,
+            digest,
+            preamble,
+            [Span(end, found.line.end), ..delimiters],
+            [node, ..nodes],
+            index + 1,
+            state,
+          )
+        }
+        Ok(#(node, end, stop, state)) -> {
+          let state =
+            push(
+              state,
+              diagnostic.MissingCloseDelimiter,
+              path,
+              Some(Span(end, end)),
+            )
+          Ok(#(
+            NodeMultipart(
+              boundary:,
+              preamble:,
+              delimiters: list.reverse(delimiters),
+              parts: list.reverse([node, ..nodes]),
+              closed: False,
+              epilogue: Span(end, end),
+            ),
+            end,
+            lift(stop),
+            state,
+          ))
+        }
+      }
   }
-}
-
-/// The epilogue runs until an ancestor's delimiter or EOF. The closed
-/// multipart's own boundary is no longer on the stack.
-fn epilogue(
-  source: BitArray,
-  size: Int,
-  start: Int,
-  stack: List(BitArray),
-) -> #(Int, Stop) {
-  scan_body(source, size, start, start, start, stack)
 }

@@ -17,6 +17,7 @@
 import eml/charset
 import eml/diagnostic.{type Kind}
 import eml/encoded_word
+import eml/internal/quoted_printable
 import eml/internal/utf8
 import gleam/bit_array
 import gleam/int
@@ -203,7 +204,7 @@ fn percent_decode(
 ) -> Result(BitArray, Nil) {
   case value {
     <<"%", h, l, rest:bytes>> ->
-      case hex(h), hex(l) {
+      case quoted_printable.hex(h), quoted_printable.hex(l) {
         Ok(h), Ok(l) -> percent_decode(rest, [<<{ h * 16 + l }>>, ..acc])
         _, _ -> Error(Nil)
       }
@@ -221,14 +222,5 @@ fn decode_charset(
   case charset.decode(bytes, label, options) {
     #(Ok(text), kinds) -> #(Resolved(text), kinds)
     #(Error(_), kinds) -> #(Unsupported, kinds)
-  }
-}
-
-fn hex(c: Int) -> Result(Int, Nil) {
-  case c {
-    _ if c >= 48 && c <= 57 -> Ok(c - 48)
-    _ if c >= 65 && c <= 70 -> Ok(c - 55)
-    _ if c >= 97 && c <= 102 -> Ok(c - 87)
-    _ -> Error(Nil)
   }
 }

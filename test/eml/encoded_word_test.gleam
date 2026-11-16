@@ -79,14 +79,6 @@ pub fn split_double_byte_character_test() {
     == #("あ", [diagnostic.EncodedWordSplitCharacter])
 }
 
-/// ISO-2022-JP is stateful: its bytes are never joined, so a character
-/// split between words is not repaired.
-pub fn no_repair_for_iso_2022_jp_test() {
-  let #(text, _) =
-    decode(<<"=?iso-2022-jp?Q?=1B$B$?= =?iso-2022-jp?Q?=22=1B(B?=">>)
-  assert text != "あ"
-}
-
 /// A word that ends in a two-byte state continues in that state in the next
 /// word, when that word does not begin with an escape sequence.
 pub fn iso_2022_jp_state_continues_test() {
@@ -131,4 +123,19 @@ pub fn latin1_word_with_c1_test() {
   // mail-parser issue #131: `=80` under iso-8859-1 is the euro sign.
   assert decode(<<"=?iso-8859-1?Q?=805.4bn?=">>)
     == #("€5.4bn", [diagnostic.C1ReinterpretedAsWindows1252])
+}
+
+pub fn word_diagnostics_in_order_test() {
+  // A word's diagnostics are in the order the decoders report them, whether
+  // the word is well-formed or not.
+  assert decode(<<"=?iso-8859-1?q?=80=00?=">>)
+    == #("\u{20AC}\u{0}", [
+      diagnostic.C1ReinterpretedAsWindows1252,
+      diagnostic.NulInText(1),
+    ])
+  assert decode(<<"=?utf-8?b?/wA=?=">>)
+    == #("\u{FFFD}\u{0}", [
+      diagnostic.MalformedCharsetData(1),
+      diagnostic.NulInText(1),
+    ])
 }

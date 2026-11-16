@@ -234,7 +234,7 @@ fn builtin(
   case family {
     AsciiFamily ->
       case is_ascii(bytes) {
-        True -> #(Ok(ascii(bytes)), [])
+        True -> #(bit_array.to_string(bytes), [])
         False -> utf8_or_windows_1252(bytes, [diagnostic.NonAsciiInAscii])
       }
     Latin1Family ->
@@ -341,13 +341,6 @@ fn count_nul(bytes: BitArray, count: Int) -> Int {
     <<0, rest:bytes>> -> count_nul(rest, count + 1)
     <<_, rest:bytes>> -> count_nul(rest, count)
     _ -> count
-  }
-}
-
-fn ascii(bytes: BitArray) -> String {
-  case bit_array.to_string(bytes) {
-    Ok(text) -> text
-    Error(_) -> ""
   }
 }
 

@@ -219,7 +219,8 @@ fn unquoted_value(
   }
 }
 
-fn skip_whitespace(rest: BitArray) -> BitArray {
+/// Skips SP, TAB, CR and LF.
+pub fn skip_whitespace(rest: BitArray) -> BitArray {
   case rest {
     <<c, rest:bytes>> if c == 32 || c == 9 || c == 13 || c == 10 ->
       skip_whitespace(rest)

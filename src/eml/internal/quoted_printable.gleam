@@ -235,7 +235,8 @@ fn finish(
   #(bit_array.concat(list.reverse(chunks)), list.append(kinds, final))
 }
 
-fn hex(c: Int) -> Result(Int, Nil) {
+/// The value of a hexadecimal digit.
+pub fn hex(c: Int) -> Result(Int, Nil) {
   case c {
     _ if c >= 48 && c <= 57 -> Ok(c - 48)
     _ if c >= 65 && c <= 70 -> Ok(c - 55)
