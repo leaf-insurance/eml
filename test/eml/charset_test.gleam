@@ -111,11 +111,71 @@ pub fn utf16_test() {
   assert decode(<<0, 0x41>>, "utf-16be") == #(Ok("A"), [])
   assert decode(<<0x41, 0>>, "utf-16le") == #(Ok("A"), [])
   assert decode(<<0xFF, 0xFE, 0x41, 0>>, "utf-16le") == #(Ok("A"), [])
-  assert decode(<<0, 0x41>>, "utf-16") == #(Ok("A"), [])
+  // Without a byte order mark, "utf-16" and its aliases are little-endian,
+  // as in browsers, .NET, Python and glibc's iconv (gen_smtp).
+  assert decode(<<0x41, 0>>, "utf-16") == #(Ok("A"), [])
+  assert decode(<<0x48, 0, 0x69, 0>>, "ucs-2") == #(Ok("Hi"), [])
   assert decode(<<0xFE, 0xFF, 0, 0x41>>, "utf-16") == #(Ok("A"), [])
   assert decode(<<0xFF, 0xFE, 0x41, 0>>, "utf-16") == #(Ok("A"), [])
   assert decode(<<0x41>>, "utf-16be")
     == #(Ok("\u{FFFD}"), [diagnostic.MalformedCharsetData(1)])
+}
+
+/// A byte order mark wins over a label that names a byte order, and over
+/// any UTF-16 label when it is UTF-8's.
+pub fn utf16_byte_order_mark_overrides_label_test() {
+  assert decode(<<0xFF, 0xFE, 0x41, 0>>, "UTF-16BE")
+    == #(Ok("A"), [diagnostic.DeclaredCharsetOverridden("UTF-16BE")])
+  assert decode(<<0xFE, 0xFF, 0, 0x41>>, "utf-16le")
+    == #(Ok("A"), [diagnostic.DeclaredCharsetOverridden("utf-16le")])
+  assert decode(<<0xEF, 0xBB, 0xBF, 0x41>>, "utf-16")
+    == #(Ok("A"), [diagnostic.DeclaredCharsetOverridden("utf-16")])
+}
+
+/// Labels are trimmed of the same whitespace, and lowercased the same way,
+/// on both targets and for every family: ASCII only.
+pub fn label_normalisation_test() {
+  assert decode(<<0x41, 0>>, "\u{000C}utf-16\u{000C}") == #(Ok("A"), [])
+  assert decode(<<0xC3, 0xA9>>, "\u{000C}us-ascii\u{000C}")
+    == #(Ok("é"), [diagnostic.NonAsciiInAscii])
+  assert decode(<<0x80>>, "\u{000C}iso-8859-1\u{000C}")
+    == #(Ok("€"), [diagnostic.C1ReinterpretedAsWindows1252])
+  assert decode(<<0x41>>, "\u{FEFF}utf-8")
+    == #(Ok("A"), [diagnostic.UnknownCharset("\u{FEFF}utf-8")])
+  assert decode(<<0x41>>, "\u{212A}oi8-r")
+    == #(Ok("A"), [diagnostic.UnknownCharset("\u{212A}oi8-r")])
+}
+
+/// Names for the CJK code pages that mail uses and WHATWG does not list.
+pub fn mail_aliases_test() {
+  assert decode(<<0x82, 0xA0>>, "cp932") == #(Ok("あ"), [])
+  assert decode(<<0x82, 0xA0>>, "windows-932") == #(Ok("あ"), [])
+  assert decode(<<0xC4, 0xE3>>, "cp936") == #(Ok("你"), [])
+  assert decode(<<0xB0, 0xA1>>, "cp949") == #(Ok("가"), [])
+  assert decode(<<0xB0, 0xA1>>, "uhc") == #(Ok("가"), [])
+  assert decode(<<0xA4, 0x40>>, "cp950") == #(Ok("一"), [])
+  assert decode(<<0xA4, 0xA2>>, "eucjp") == #(Ok("あ"), [])
+  assert decode(<<0xA4, 0xA2>>, "euc_jp") == #(Ok("あ"), [])
+  // Extensions of ISO-2022-JP are 7-bit, so they must not be mistaken for
+  // valid UTF-8.
+  assert decode(
+      <<0x1B, 0x24, 0x42, 0x24, 0x22, 0x1B, 0x28, 0x42>>,
+      "iso-2022-jp-2",
+    )
+    == #(Error(Nil), [diagnostic.UnsupportedCharset("iso-2022-jp-2")])
+}
+
+/// With the override, UTF-8 mislabelled as a multi-byte charset is
+/// recognised too.
+pub fn utf8_override_multi_byte_test() {
+  let options = charset.default_options() |> charset.with_utf8_override(True)
+  assert charset.decode(<<"你好":utf8>>, Some("gb2312"), options)
+    == #(Ok("你好"), [diagnostic.DeclaredCharsetOverridden("gb2312")])
+  assert charset.decode(<<"日本語":utf8>>, Some("shift_jis"), options)
+    == #(Ok("日本語"), [diagnostic.DeclaredCharsetOverridden("shift_jis")])
+  // Not for UTF-16, whose bytes are not text in any other charset.
+  assert charset.decode(<<0x41, 0>>, Some("utf-16le"), options)
+    == #(Ok("A"), [])
 }
 
 pub fn custom_decoder_test() {

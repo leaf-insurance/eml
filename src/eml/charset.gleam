@@ -10,21 +10,23 @@
 ////   control characters.
 //// - WHATWG's "replacement" labels (ISO-2022-KR, HZ-GB-2312, ...) are
 ////   reported as unsupported, rather than decoded to a single U+FFFD.
-//// - "utf-16" follows RFC 2781: a byte order mark decides the byte order,
-////   and without one the text is big-endian. A byte order mark also decides
-////   for the other UTF-16 labels.
+//// - Mail names for the CJK code pages (`cp932`, `cp936`, `cp949`,
+////   `cp950`, `eucjp`, ...) are accepted, and extensions of ISO-2022-JP are
+////   reported as unsupported.
+//// - A byte order mark decides the byte order of UTF-16, as in WHATWG, and
+////   `DeclaredCharsetOverridden` is reported when it contradicts a label
+////   that names a byte order.
 ////
 //// A declared single-byte charset is never overridden by sniffing, unless
 //// the caller asks for it with `with_utf8_override`.
 
 import eml/diagnostic.{type Kind}
-import eml/internal/structured
 import eml/internal/utf8
 import gleam/bit_array
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
-import text_encoding.{type Encoding, KeepBom}
+import text_encoding.{type Encoding, KeepBom, SniffBom}
 
 pub opaque type Options {
   Options(
@@ -47,8 +49,8 @@ pub fn with_decoder(
   Options(..options, decoder: Some(decoder))
 }
 
-/// When enabled, text that declares a single-byte charset but is valid
-/// UTF-8 containing non-ASCII bytes is decoded as UTF-8, and
+/// When enabled, text that declares a charset other than UTF-8 or UTF-16
+/// but is valid UTF-8 containing non-ASCII bytes is decoded as UTF-8, and
 /// `DeclaredCharsetOverridden` is reported. This helps with senders that
 /// mislabel UTF-8. It is off by default, because valid UTF-8 is not proof of
 /// intent.
@@ -74,7 +76,28 @@ const legacy_labels = [
   "cp860", "ibm860", "861", "cp861", "ibm861", "862", "cp862", "ibm862", "863",
   "cp863", "ibm863", "865", "cp865", "ibm865", "869", "cp869", "ibm869", "cp037",
   "ibm037", "cp1047", "ibm1047", "cp500", "ibm500", "tis-620-2533", "viscii",
-  "armscii-8", "georgian-ps", "koi8-t", "cp1125",
+  "armscii-8", "georgian-ps", "koi8-t", "cp1125", "iso-2022-jp-1",
+  "iso-2022-jp-2", "iso-2022-jp-3", "iso-2022-jp-2004", "csiso2022jp2",
+]
+
+/// Names for WHATWG encodings that mail uses and WHATWG does not list.
+const mail_aliases = [
+  #("cp932", text_encoding.ShiftJis),
+  #("windows-932", text_encoding.ShiftJis),
+  #("cp936", text_encoding.Gbk),
+  #("windows-936", text_encoding.Gbk),
+  #("ms936", text_encoding.Gbk),
+  #("euc-cn", text_encoding.Gbk),
+  #("cp949", text_encoding.EucKr),
+  #("ms949", text_encoding.EucKr),
+  #("uhc", text_encoding.EucKr),
+  #("x-windows-949", text_encoding.EucKr),
+  #("cp950", text_encoding.Big5),
+  #("ms950", text_encoding.Big5),
+  #("windows-950", text_encoding.Big5),
+  #("eucjp", text_encoding.EucJp),
+  #("euc_jp", text_encoding.EucJp),
+  #("ujis", text_encoding.EucJp),
 ]
 
 const ascii_labels = [
@@ -87,13 +110,26 @@ const latin1_labels = [
   "latin1", "latin-1", "l1", "cp819", "ibm819", "csisolatin1", "iso-ir-100",
 ]
 
-/// Normalises a label: trims ASCII whitespace and lowercases it.
+/// Normalises a label as WHATWG does: trims ASCII whitespace and lowercases
+/// ASCII letters. Other characters are kept.
 pub fn normalise(label: String) -> String {
-  let trimmed = structured.trim(bit_array.from_string(label))
-  case bit_array.to_string(trimmed) {
-    Ok(label) -> string.lowercase(label)
-    Error(_) -> string.lowercase(label)
-  }
+  string.to_utf_codepoints(label)
+  |> list.map(string.utf_codepoint_to_int)
+  |> list.drop_while(is_whitespace)
+  |> list.reverse
+  |> list.drop_while(is_whitespace)
+  |> list.reverse
+  |> list.filter_map(fn(c) {
+    case c >= 0x41 && c <= 0x5A {
+      True -> string.utf_codepoint(c + 32)
+      False -> string.utf_codepoint(c)
+    }
+  })
+  |> string.from_utf_codepoints
+}
+
+fn is_whitespace(c: Int) -> Bool {
+  c == 0x09 || c == 0x0A || c == 0x0C || c == 0x0D || c == 0x20
 }
 
 fn family(label: String) -> Family {
@@ -101,9 +137,9 @@ fn family(label: String) -> Family {
     True, _ -> AsciiFamily
     _, True -> Latin1Family
     False, False ->
-      case text_encoding.get(label) {
-        Ok(encoding) -> Whatwg(encoding)
-        Error(_) ->
+      case list.key_find(mail_aliases, label), text_encoding.get(label) {
+        Ok(encoding), _ | _, Ok(encoding) -> Whatwg(encoding)
+        _, _ ->
           case list.contains(legacy_labels, label) {
             True -> Legacy
             False -> UnknownLabel
@@ -112,16 +148,45 @@ fn family(label: String) -> Family {
   }
 }
 
-/// Whether a label names a built-in charset without shift states, so that
-/// the bytes of adjacent encoded-words may be joined to repair a character
-/// split between them. ISO-2022-JP is stateful; unknown labels, and
-/// charsets left to a caller's decoder, are not assumed to be stateless.
-pub fn is_stateless(label: String) -> Bool {
+/// Whether the bytes of adjacent encoded-words in this charset may be
+/// joined to repair a character split between them. Not for ISO-2022-JP,
+/// which has shift states, nor UTF-16, where a byte order mark in one word
+/// would decide the byte order of the others. Unknown labels, and charsets
+/// left to a caller's decoder, are never joined.
+pub fn can_join(label: String) -> Bool {
   case family(normalise(label)) {
     AsciiFamily | Latin1Family -> True
-    Whatwg(text_encoding.Iso2022Jp) | Whatwg(text_encoding.Replacement) -> False
+    Whatwg(text_encoding.Iso2022Jp)
+    | Whatwg(text_encoding.Replacement)
+    | Whatwg(text_encoding.Utf16Be)
+    | Whatwg(text_encoding.Utf16Le) -> False
     Whatwg(_) -> True
     Legacy | UnknownLabel -> False
+  }
+}
+
+/// For ISO-2022-JP, the escape sequence of the state that `bytes` end in,
+/// or `<<>>` when that is ASCII. `<<>>` for every other charset.
+pub fn final_state(label: String, bytes: BitArray) -> BitArray {
+  case family(normalise(label)) {
+    Whatwg(text_encoding.Iso2022Jp) -> last_escape(bytes, <<>>)
+    _ -> <<>>
+  }
+}
+
+fn last_escape(bytes: BitArray, state: BitArray) -> BitArray {
+  case bytes {
+    <<0x1B, 0x28, 0x42, rest:bytes>> -> last_escape(rest, <<>>)
+    <<0x1B, 0x28, 0x4A, rest:bytes>>
+    | <<0x1B, 0x28, 0x49, rest:bytes>>
+    | <<0x1B, 0x24, 0x40, rest:bytes>>
+    | <<0x1B, 0x24, 0x42, rest:bytes>> -> {
+      let size = bit_array.byte_size(bytes) - bit_array.byte_size(rest)
+      let assert Ok(escape) = bit_array.slice(bytes, 0, size)
+      last_escape(rest, escape)
+    }
+    <<_, rest:bytes>> -> last_escape(rest, state)
+    _ -> state
   }
 }
 
@@ -187,50 +252,30 @@ fn builtin(
     }
     Whatwg(text_encoding.Utf16Be as declared)
     | Whatwg(text_encoding.Utf16Le as declared) -> {
-      let #(bytes, encoding) = case bytes {
-        <<0xFE, 0xFF, rest:bytes>> -> #(rest, text_encoding.Utf16Be)
-        <<0xFF, 0xFE, rest:bytes>> -> #(rest, text_encoding.Utf16Le)
-        _ if normalised == Some("utf-16") -> #(bytes, text_encoding.Utf16Be)
-        _ -> #(bytes, declared)
+      let decoded = text_encoding.decode_with(bytes, declared, SniffBom)
+      let names_order =
+        list.contains(
+          ["utf-16be", "utf-16le", "unicodefffe", "unicodefeff"],
+          option.unwrap(normalised, ""),
+        )
+      let overridden = case decoded.encoding {
+        encoding if encoding == declared -> []
+        text_encoding.Utf8 -> [overridden(label)]
+        _ if names_order -> [overridden(label)]
+        _ -> []
       }
-      let #(text, errors) = whatwg(bytes, encoding)
-      #(Ok(text), malformed(errors))
+      #(Ok(decoded.text), list.append(overridden, malformed(decoded.errors)))
     }
     Whatwg(encoding) ->
-      case is_single_byte(encoding) {
-        True ->
-          override(bytes, label, options, fn() {
-            let #(text, errors) = whatwg(bytes, encoding)
-            #(Ok(text), malformed(errors))
-          })
-        False -> {
-          let #(text, errors) = whatwg(bytes, encoding)
-          #(Ok(text), malformed(errors))
-        }
-      }
+      override(bytes, label, options, fn() {
+        let #(text, errors) = whatwg(bytes, encoding)
+        #(Ok(text), malformed(errors))
+      })
     Legacy -> unsupported()
     UnknownLabel ->
       utf8_or_windows_1252(bytes, [
         diagnostic.UnknownCharset(option.unwrap(normalised, "")),
       ])
-  }
-}
-
-fn is_single_byte(encoding: Encoding) -> Bool {
-  case encoding {
-    text_encoding.Utf8
-    | text_encoding.Utf16Be
-    | text_encoding.Utf16Le
-    | text_encoding.Gbk
-    | text_encoding.Gb18030
-    | text_encoding.Big5
-    | text_encoding.EucJp
-    | text_encoding.Iso2022Jp
-    | text_encoding.ShiftJis
-    | text_encoding.EucKr
-    | text_encoding.Replacement
-    | text_encoding.XUserDefined -> False
-    _ -> True
   }
 }
 
@@ -246,12 +291,14 @@ fn override(
     False -> otherwise()
     True ->
       case is_ascii(bytes), utf8.to_string(utf8.strip_mark(bytes)) {
-        False, Ok(text) -> #(Ok(text), [
-          diagnostic.DeclaredCharsetOverridden(option.unwrap(label, "")),
-        ])
+        False, Ok(text) -> #(Ok(text), [overridden(label)])
         _, _ -> otherwise()
       }
   }
+}
+
+fn overridden(label: Option(String)) -> Kind {
+  diagnostic.DeclaredCharsetOverridden(option.unwrap(label, ""))
 }
 
 fn malformed(errors: Int) -> List(Kind) {

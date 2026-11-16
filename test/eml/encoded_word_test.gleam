@@ -79,12 +79,38 @@ pub fn split_double_byte_character_test() {
     == #("あ", [diagnostic.EncodedWordSplitCharacter])
 }
 
-/// ISO-2022-JP is stateful: its words are never joined.
+/// ISO-2022-JP is stateful: its bytes are never joined, so a character
+/// split between words is not repaired.
 pub fn no_repair_for_iso_2022_jp_test() {
-  let #(text, kinds) =
+  let #(text, _) =
     decode(<<"=?iso-2022-jp?Q?=1B$B$?= =?iso-2022-jp?Q?=22=1B(B?=">>)
   assert text != "あ"
+}
+
+/// A word that ends in a two-byte state continues in that state in the next
+/// word, when that word does not begin with an escape sequence.
+pub fn iso_2022_jp_state_continues_test() {
+  assert decode(<<"=?ISO-2022-JP?B?GyRCJCI=?= =?ISO-2022-JP?B?JCQbKEI=?=">>)
+    == #("あい", [diagnostic.EncodedWordSplitCharacter])
+  // Words that end in ASCII are unchanged.
+  assert decode(<<"=?ISO-2022-JP?B?GyRCJCIbKEI=?= =?ISO-2022-JP?B?JCQ=?=">>)
+    == #("あ$$", [])
+}
+
+/// UTF-16 words are not joined: a byte order mark in one word must not
+/// decide the byte order of another.
+pub fn no_repair_for_utf16_test() {
+  let #(text, kinds) =
+    decode(<<"=?utf-16le?B?QQ==?= =?utf-16le?B?AA==?= =?utf-16le?B?/v8AQg==?=">>)
+  assert text == "\u{FFFD}\u{FFFD}B"
   assert !list.contains(kinds, diagnostic.EncodedWordSplitCharacter)
+  assert decode(<<"=?utf-16?B?//5IAA==?= =?utf-16?B?aQA=?=">>) == #("Hi", [])
+}
+
+/// Counts are added up across words, not deduplicated.
+pub fn counts_add_up_test() {
+  assert decode(<<"=?shift_jis?B?/w==?= =?shift_jis?B?/w==?=">>)
+    == #("\u{FFFD}\u{FFFD}", [diagnostic.MalformedCharsetData(2)])
 }
 
 pub fn not_an_encoded_word_test() {

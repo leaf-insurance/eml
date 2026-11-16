@@ -118,7 +118,8 @@ pub fn encoded_word_diagnostics_test() {
     == #("=GG", [diagnostic.InvalidQuotedPrintable(1)])
 }
 
-/// pi-m4: no split-character repair for stateful charsets.
+/// pi-m4: no split-character repair for stateful charsets. The bytes are
+/// not joined; only the shift state continues into the next word.
 pub fn no_repair_for_stateful_charsets_test() {
   let options =
     charset.default_options()
@@ -133,8 +134,8 @@ pub fn no_repair_for_stateful_charsets_test() {
       <<"=?iso-2022-jp?Q?=1B$B$?= =?iso-2022-jp?Q?=22=1B(B?=">>,
       options,
     )
-  assert text != "あ"
-  assert !list.contains(kinds, diagnostic.EncodedWordSplitCharacter)
+  assert text == "\u{FFFD}\u{FFFD}"
+  assert list.contains(kinds, diagnostic.MalformedCharsetData(2))
 }
 
 /// fable-F18: an encoded leading space is kept; only raw whitespace is

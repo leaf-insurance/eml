@@ -438,13 +438,27 @@ The rules are applied in this order (V2-M8):
 4. **Other WHATWG labels** (UTF-8, the single-byte encodings, and since M3
    the CJK encodings and UTF-16): WHATWG decoding in *replacement* mode, by
    the separate pure Gleam package `text_encoding`. A malformed sequence
-   gives U+FFFD and `MalformedCharsetData` (Warning). A declared
-   single-byte label is never overridden by UTF-8 sniffing.
+   gives U+FFFD and `MalformedCharsetData` (Warning). A declared label is
+   never overridden by UTF-8 sniffing, unless the caller enables
+   `with_utf8_override`, which applies to every label but UTF-8 and UTF-16.
+   - Labels are normalised as WHATWG does: ASCII whitespace trimmed, ASCII
+     letters lowercased, nothing else changed.
+   - Mail names for the CJK code pages that WHATWG does not list are
+     accepted: `cp932`, `windows-932` (Shift_JIS); `cp936`, `windows-936`,
+     `ms936`, `euc-cn` (GBK); `cp949`, `ms949`, `uhc`, `x-windows-949`
+     (EUC-KR); `cp950`, `ms950`, `windows-950` (Big5); `eucjp`, `euc_jp`,
+     `ujis` (EUC-JP). The ISO-2022-JP extensions (`iso-2022-jp-2` and the
+     rest) are unsupported (rule 5): they are 7-bit, so the unknown-label
+     rule would pass their escape sequences off as text.
    - UTF-8: one leading byte order mark is removed.
-   - UTF-16 (M3): a leading byte order mark decides the byte order and is
-     removed. Without one, `utf-16` is big-endian, as RFC 2781 §4.3 says;
-     WHATWG would choose little-endian, which suits web content but not
-     mail. Other UTF-16 labels keep their WHATWG byte order.
+   - UTF-16 (M3): as WHATWG. A leading byte order mark decides the byte
+     order (a UTF-8 one decides UTF-8) and is removed; without one, `utf-16`
+     and its aliases (`ucs-2`, `unicode`, ...) are little-endian. Browsers,
+     Thunderbird, .NET (`Encoding.Unicode`, which writes no mark), Python
+     and glibc's iconv (and so gen_smtp) all decode it that way, although
+     RFC 2781 §4.3 says big-endian. When the mark contradicts a label that
+     names a byte order (`utf-16be`, `utf-16le`, ...), or is UTF-8's,
+     `DeclaredCharsetOverridden` (Warning).
 5. **Known but unsupported** (UTF-7, UTF-32, DOS and EBCDIC code pages): left
    undecoded, `UnsupportedCharset` (DataLoss).
 6. **WHATWG "replacement" labels** (ISO-2022-KR, HZ-GB-2312, ISO-2022-CN,
@@ -471,9 +485,14 @@ Two further rules apply:
    - The local part and domain are never charset-guessed.
    - Local parts and message IDs are never lowercased.
 3. Encoded-words are decoded independently. A split multibyte character is
-   repaired only on failure, only for stateless charsets, and only within one
-   run of adjacent words that share a charset (V2-m3). Test vector:
-   `=?utf-8?B?ww==?= =?utf-8?B?qQ==?=` decodes to `é`.
+   repaired only on failure, only for charsets whose bytes can be joined
+   (not ISO-2022-JP, not UTF-16), and only within one run of adjacent words
+   that share a charset (V2-m3). Test vector:
+   `=?utf-8?B?ww==?= =?utf-8?B?qQ==?=` decodes to `é`. An ISO-2022-JP word
+   that does not end in ASCII passes its shift state to the next word,
+   unless that word begins with an escape sequence, with
+   `EncodedWordSplitCharacter`. Counts in diagnostics are added up across
+   words.
 4. RFC 2231 (V2-M9). Raw sections are kept, without enumerating their
    combinations. The result is one of `Resolved(value)`, `Ambiguous`,
    `Malformed` or `Unsupported`:
@@ -580,7 +599,7 @@ passes on Erlang/OTP 28 and Node 24, as does the Elixir smoke test.
 | §E.1 | The parameter list keeps every occurrence; lookups take the first (`DuplicateParameter` is still reported). In an unquoted value, `(` starts a comment only when nothing but whitespace follows it before the next `;`. In a quoted value, `\` escapes only `"` and `\` (Windows paths). An invalid Content-Type inside `multipart/digest` falls back to `message/rfc822`. |
 | §G | `eml/charset`. Decoding is done by `text_encoding` (M3; before that, by tables generated in eml from the same WHATWG commit, `be17ac5c49881336538acfc7b40dba3c8009144b`), and checked against Python's codecs (`charset_vectors_test.gleam`). The ASCII and Latin-1 families include IANA aliases (`iso646-us`, `latin-1`, ...). Known legacy charsets (UTF-7, UTF-32, DOS and EBCDIC code pages) are `UnsupportedCharset`, not guessed. A caller decoder is consulted only for a declared label; its type is `fn(String, BitArray) -> Result(String, Nil)`. One leading UTF-8 byte order mark is removed when text is decoded as UTF-8; elsewhere U+FEFF is kept, identically on both targets (`eml/internal/utf8`). NUL is counted in the decoded text. |
 | §H.2 | `eml/address`: `Individual(Mailbox)`, `Group(name, members)`, `Invalid(raw)`. Local parts and domains must be `word ("." word)*` (comments and whitespace around dots allowed) without control characters; anything else is `Invalid`. `a@b <c@d>` is the mailbox `c@d` named `a@b`, with `InvalidAddress`. Groups are never parsed inside groups. Encoded-words are single tokens, so a comma inside one does not split a display name. `eml.from` returns `Multiple` for more than one From field. |
-| §H.3 | `eml/encoded_word`; `eml.header_text`, `eml.subject`, and `_with` variants taking charset options. Charset and transfer recoveries are reported. Split-character repair only joins words in stateless charsets eml decodes itself. Only raw whitespace around the value is trimmed. |
+| §H.3 | `eml/encoded_word`; `eml.header_text`, `eml.subject`, and `_with` variants taking charset options. Charset and transfer recoveries are reported. Split-character repair only joins words in charsets eml decodes itself, except ISO-2022-JP and UTF-16. Only raw whitespace around the value is trimmed. |
 | §H.4 | `eml/parameter`; `eml.disposition`, `eml.filename`, `eml.filename_with`. RFC 2047 decoding of a plain `filename` happens before falling back to Content-Type `name` (more useful than the order listed in §H.4). An empty name falls through. An unsupported charset is reported as `UnsupportedCharset`, not as a malformed parameter. |
 | §I.1 | `eml/filename.safe` works on code points, and checks the final, truncated result. It also removes zero-width characters, U+2028, U+2029 and U+FEFF, and reserves `COM0`, `LPT0`, `COM¹²³`, `LPT¹²³`, `CONIN$` and `CONOUT$`. |
 | §I.3 | `eml.bodies`: RFC 8621 §4.1.4 `parseStructure`, unchanged. A multipart whose body is opaque is an attachment. |
@@ -595,12 +614,13 @@ against encoding_rs. eml now decodes GBK/gb18030, Big5, EUC-JP, ISO-2022-JP,
 Shift_JIS, EUC-KR and UTF-16 itself; the policy in §G is unchanged
 otherwise, with these additions:
 
-- §G.4: UTF-16 follows RFC 2781 for the `utf-16` label.
+- §G.4: UTF-16 follows WHATWG: a byte order mark decides, otherwise
+  little-endian. Mail aliases for the CJK code pages are accepted.
 - §G.6: "replacement" labels stay unsupported rather than becoming U+FFFD.
 - §H.3: split-character repair joins encoded-words in every built-in
-  charset without shift states: all WHATWG encodings except ISO-2022-JP and
-  "replacement". A Shift_JIS or GBK double-byte character split between
-  words is the case the repair exists for.
+  charset except ISO-2022-JP, UTF-16 and "replacement". A Shift_JIS or GBK
+  double-byte character split between words is the case the repair exists
+  for. ISO-2022-JP words pass on their shift state instead.
 - The gen_smtp fixtures `chinesemail` and `shift-jismail` are now decoded,
   and compared with text decoded independently by
   `dev/cjk_expectations.py`.

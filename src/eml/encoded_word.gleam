@@ -14,6 +14,7 @@ import eml/internal/base64
 import eml/internal/structured.{slice}
 import eml/internal/utf8
 import gleam/bit_array
+import gleam/dict
 import gleam/list
 import gleam/option.{Some}
 import gleam/string
@@ -38,7 +39,7 @@ pub fn decode(
   let tokens =
     drop_whitespace_between_words(tokenise(value, value, 0, 0, False, []))
   let #(parts, kinds) = decode_tokens(tokens, options, [], [])
-  #(string.concat(parts), kinds)
+  #(string.concat(parts), merge(kinds))
 }
 
 // ---------------------------------------------------------------------------
@@ -281,7 +282,9 @@ fn decode_run(
     [Word(charset:, ..), ..] -> charset
     _ -> ""
   }
-  let decoded = list.map(run, fn(word) { #(word, word_bytes(word)) })
+  let decoded =
+    list.map(run, fn(word) { #(word, word_bytes(word)) })
+    |> continue_states(label, <<>>, [])
   // 1. Each word on its own, without replacement characters.
   let strict =
     list.try_map(decoded, fn(entry) {
@@ -297,11 +300,11 @@ fn decode_run(
   case strict {
     Ok(words) -> #(
       string.concat(list.map(words, fn(word) { word.0 })),
-      list.unique(list.flat_map(words, fn(word) { word.1 })),
+      list.flat_map(words, fn(word) { word.1 }),
     )
     Error(_) -> {
-      // 2. For a stateless charset, the bytes of all the words together, to
-      // repair a multi-byte character split between them.
+      // 2. For a charset whose bytes can be joined, the bytes of all the
+      // words together, to repair a multi-byte character split between them.
       let all =
         list.try_map(decoded, fn(entry) {
           case entry.1 {
@@ -309,7 +312,7 @@ fn decode_run(
             Undecodable -> Error(Nil)
           }
         })
-      let joined = case all, charset.is_stateless(label) {
+      let joined = case all, charset.can_join(label) {
         Ok([_, _, ..] as bytes), True ->
           strict_decode(bit_array.concat(bytes), label, options)
         _, _ -> Error(Nil)
@@ -323,17 +326,91 @@ fn decode_run(
                 Undecodable -> []
               }
             })
-          #(
-            text,
-            list.unique([
-              diagnostic.EncodedWordSplitCharacter,
-              ..list.append(transfer, kinds)
-            ]),
-          )
+          #(text, [
+            diagnostic.EncodedWordSplitCharacter,
+            ..list.append(transfer, kinds)
+          ])
         }
         Error(_) -> lenient_run(decoded, label, options)
       }
     }
+  }
+}
+
+/// Each ISO-2022-JP word should end in ASCII. When one ends in another
+/// state, the next word continues in that state, unless it begins with an
+/// escape sequence of its own.
+fn continue_states(
+  decoded: List(#(Token, Bytes)),
+  label: String,
+  state: BitArray,
+  acc: List(#(Token, Bytes)),
+) -> List(#(Token, Bytes)) {
+  case decoded {
+    [] -> list.reverse(acc)
+    [#(word, Decoded(bytes, kinds)), ..rest] -> {
+      let #(bytes, kinds) = case state, bytes {
+        <<>>, _ | _, <<0x1B, _:bytes>> -> #(bytes, kinds)
+        _, _ -> #(<<state:bits, bytes:bits>>, [
+          diagnostic.EncodedWordSplitCharacter,
+          ..kinds
+        ])
+      }
+      continue_states(rest, label, charset.final_state(label, bytes), [
+        #(word, Decoded(bytes, kinds)),
+        ..acc
+      ])
+    }
+    [entry, ..rest] -> continue_states(rest, label, <<>>, [entry, ..acc])
+  }
+}
+
+/// Combines the diagnostics of all the words: counts are added up, and
+/// other kinds are kept once, in order of first occurrence.
+fn merge(kinds: List(Kind)) -> List(Kind) {
+  let #(order, counts) =
+    list.fold(kinds, #([], dict.new()), fn(acc, kind) {
+      let #(order, counts) = acc
+      let #(key, n) = split_count(kind)
+      case dict.get(counts, key) {
+        Ok(total) -> #(order, dict.insert(counts, key, total + n))
+        Error(_) -> #([key, ..order], dict.insert(counts, key, n))
+      }
+    })
+  list.reverse(order)
+  |> list.map(fn(key) {
+    let assert Ok(n) = dict.get(counts, key)
+    with_count(key, n)
+  })
+}
+
+/// A kind with a count, as the kind with a zero count and the count.
+fn split_count(kind: Kind) -> #(Kind, Int) {
+  case kind {
+    diagnostic.MalformedCharsetData(n) -> #(with_count(kind, 0), n)
+    diagnostic.NulInText(n) -> #(with_count(kind, 0), n)
+    diagnostic.InvalidQuotedPrintable(n) -> #(with_count(kind, 0), n)
+    diagnostic.InvalidEncodedWord(n) -> #(with_count(kind, 0), n)
+    diagnostic.StrayPadding(n) -> #(with_count(kind, 0), n)
+    diagnostic.InvalidBase64Characters(n) -> #(with_count(kind, 0), n)
+    diagnostic.ExcessBase64Padding(n) -> #(with_count(kind, 0), n)
+    diagnostic.UnencodedOctets(n) -> #(with_count(kind, 0), n)
+    _ -> #(kind, 0)
+  }
+}
+
+fn with_count(kind: Kind, n: Int) -> Kind {
+  case kind {
+    diagnostic.MalformedCharsetData(_) -> diagnostic.MalformedCharsetData(n)
+    diagnostic.NulInText(_) -> diagnostic.NulInText(n)
+    diagnostic.InvalidQuotedPrintable(_) -> diagnostic.InvalidQuotedPrintable(n)
+    diagnostic.InvalidEncodedWord(_) -> diagnostic.InvalidEncodedWord(n)
+    diagnostic.StrayPadding(_) -> diagnostic.StrayPadding(n)
+    diagnostic.InvalidBase64Characters(_) ->
+      diagnostic.InvalidBase64Characters(n)
+    diagnostic.ExcessBase64Padding(_) -> diagnostic.ExcessBase64Padding(n)
+    diagnostic.UnencodedOctets(_) -> diagnostic.UnencodedOctets(n)
+    _ -> kind
   }
 }
 
@@ -398,7 +475,7 @@ fn lenient_run(
     0 -> kinds
     n -> [diagnostic.InvalidEncodedWord(n), ..kinds]
   }
-  #(string.concat(list.reverse(texts)), list.unique(list.reverse(kinds)))
+  #(string.concat(list.reverse(texts)), list.reverse(kinds))
 }
 
 /// The Q encoding (RFC 2047 §4.2): `_` is a space, `=XX` is a byte, and
