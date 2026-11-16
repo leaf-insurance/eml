@@ -3,7 +3,9 @@
 import eml/charset
 import eml/diagnostic
 import eml/encoded_word
+import gleam/bit_array
 import gleam/list
+import gleam/string
 
 fn decode(value: BitArray) {
   encoded_word.decode(value, charset.default_options())
@@ -136,6 +138,79 @@ pub fn word_diagnostics_in_order_test() {
   assert decode(<<"=?utf-8?b?/wA=?=">>)
     == #("\u{FFFD}\u{0}", [
       diagnostic.MalformedCharsetData(1),
+      diagnostic.NulInText(1),
+    ])
+}
+
+/// ISO-2022-JP is stateful: its bytes are never joined, so a character
+/// split between words is not repaired.
+pub fn no_repair_for_iso_2022_jp_test() {
+  let #(text, _) =
+    decode(<<"=?iso-2022-jp?Q?=1B$B$?= =?iso-2022-jp?Q?=22=1B(B?=">>)
+  assert text == "\u{FFFD}\""
+}
+
+/// pi-r4-2: the shift state continues only into words that the built-in
+/// ISO-2022-JP decoder decodes; the UTF-8 override and a caller's decoder
+/// see the word's own bytes.
+pub fn state_continues_only_into_iso_2022_jp_test() {
+  let override = charset.default_options() |> charset.with_utf8_override(True)
+  let input = <<"=?iso-2022-jp?Q?=1B$B$=22?= =?iso-2022-jp?Q?=C3=A9?=">>
+  assert encoded_word.decode(input, override)
+    == #("あé", [diagnostic.DeclaredCharsetOverridden("iso-2022-jp")])
+  let hex =
+    charset.default_options()
+    |> charset.with_decoder(fn(_, bytes) { Ok(bit_array.base16_encode(bytes)) })
+  let input = <<"=?iso-2022-jp?Q?=1B$B$=22?= =?iso-2022-jp?Q?ABC?=">>
+  assert encoded_word.decode(input, hex) == #("1B24422422414243", [])
+}
+
+/// pi-r4-5: only a recognised escape sequence at the start of a word
+/// replaces the state it inherits.
+pub fn invalid_escape_keeps_inherited_state_test() {
+  assert decode(<<"=?iso-2022-jp?Q?=1B(J=5C?= =?iso-2022-jp?Q?=1BX=5C?=">>)
+    == #("¥\u{FFFD}X¥", [
+      diagnostic.EncodedWordSplitCharacter,
+      diagnostic.MalformedCharsetData(1),
+    ])
+  // A recognised escape: no continuation.
+  assert decode(<<"=?iso-2022-jp?Q?=1B$B$=22?= =?iso-2022-jp?Q?=1B$B$$=1B(B?=">>)
+    == #("あい", [])
+  // Roman is a state too.
+  assert decode(<<"=?iso-2022-jp?Q?=1B(J=5C?= =?iso-2022-jp?Q?=5C?=">>)
+    == #("¥¥", [diagnostic.EncodedWordSplitCharacter])
+  // A word that cannot be decoded ends the state.
+  let #(text, _) =
+    decode(<<
+      "=?iso-2022-jp?Q?=1B$B$=22?= =?iso-2022-jp?B?!!!?= =?iso-2022-jp?Q?$$?=",
+    >>)
+  assert string.ends_with(text, "$$")
+  // A word that decodes cleanly on its own is not garbled by the state.
+  let #(text, _) =
+    decode(<<"=?iso-2022-jp?Q?=1B$B$=22?= =?iso-2022-jp?Q?_abc?=">>)
+  assert text == "あ abc"
+}
+
+/// fable-r4-E1: a UTF-16 word without a byte order mark continues in the
+/// byte order of the word before it.
+pub fn utf16_byte_order_continues_test() {
+  assert decode(<<"=?utf-16?B?/v8AQQ==?= =?utf-16?B?AEI=?=">>)
+    == #("AB", [diagnostic.EncodedWordSplitCharacter])
+}
+
+/// fable-r4-E3: runs are grouped by charset, not by label text.
+pub fn runs_group_by_charset_test() {
+  assert decode(<<"=?utf-8?Q?=C3?= =?utf8?Q?=A9?=">>)
+    == #("é", [diagnostic.EncodedWordSplitCharacter])
+  assert decode(<<"=?shift_jis?Q?=82?= =?cp932?Q?=A0?=">>)
+    == #("あ", [diagnostic.EncodedWordSplitCharacter])
+}
+
+/// pi-r4-3: a byte order mark in a label is kept on both targets.
+pub fn label_with_byte_order_mark_test() {
+  assert decode(<<"=?\u{FEFF}utf-16le?B?QQA=?=":utf8>>)
+    == #("A\u{0000}", [
+      diagnostic.UnknownCharset("\u{FEFF}utf-16le"),
       diagnostic.NulInText(1),
     ])
 }

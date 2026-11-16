@@ -52,7 +52,9 @@ pub fn with_decoder(
 /// When enabled, text that declares a charset other than UTF-8 or UTF-16
 /// but is valid UTF-8 containing non-ASCII bytes is decoded as UTF-8, and
 /// `DeclaredCharsetOverridden` is reported. This helps with senders that
-/// mislabel UTF-8. It is off by default, because valid UTF-8 is not proof of
+/// mislabel UTF-8. For the multi-byte CJK charsets the text must contain a
+/// UTF-8 sequence of three or more bytes, since short CJK text is often
+/// valid two-byte UTF-8 by chance. It is off by default, because valid UTF-8 is not proof of
 /// intent.
 pub fn with_utf8_override(options: Options, enabled: Bool) -> Options {
   Options(..options, utf8_override: enabled)
@@ -76,8 +78,8 @@ const legacy_labels = [
   "cp860", "ibm860", "861", "cp861", "ibm861", "862", "cp862", "ibm862", "863",
   "cp863", "ibm863", "865", "cp865", "ibm865", "869", "cp869", "ibm869", "cp037",
   "ibm037", "cp1047", "ibm1047", "cp500", "ibm500", "tis-620-2533", "viscii",
-  "armscii-8", "georgian-ps", "koi8-t", "cp1125", "iso-2022-jp-1",
-  "iso-2022-jp-2", "iso-2022-jp-3", "iso-2022-jp-2004", "csiso2022jp2",
+  "armscii-8", "georgian-ps", "koi8-t", "cp1125", "cp50220", "cp50221",
+  "cp50222", "csiso2022jp2",
 ]
 
 /// Names for WHATWG encodings that mail uses and WHATWG does not list.
@@ -140,7 +142,12 @@ fn family(label: String) -> Family {
       case list.key_find(mail_aliases, label), text_encoding.get(label) {
         Ok(encoding), _ | _, Ok(encoding) -> Whatwg(encoding)
         _, _ ->
-          case list.contains(legacy_labels, label) {
+          // Every ISO-2022 variant but ISO-2022-JP is 7-bit, so the
+          // unknown-label rule would pass its escape sequences off as text.
+          case
+            list.contains(legacy_labels, label)
+            || string.starts_with(label, "iso-2022-")
+          {
             True -> Legacy
             False -> UnknownLabel
           }
@@ -148,45 +155,47 @@ fn family(label: String) -> Family {
   }
 }
 
+/// A declared charset label, resolved once.
+@internal
+pub opaque type Charset {
+  Charset(declared: Option(String), label: String, family: Family)
+}
+
+@internal
+pub fn resolve(declared: Option(String)) -> Charset {
+  case declared {
+    None -> Charset(None, "", AsciiFamily)
+    Some(declared) -> {
+      let label = normalise(declared)
+      Charset(Some(declared), label, family(label))
+    }
+  }
+}
+
+/// Whether two labels name the same charset, so that their encoded-words
+/// form one run.
+@internal
+pub fn same(a: Charset, b: Charset) -> Bool {
+  case a.family, b.family {
+    Legacy, Legacy | UnknownLabel, UnknownLabel -> a.label == b.label
+    a, b -> a == b
+  }
+}
+
 /// Whether the bytes of adjacent encoded-words in this charset may be
-/// joined to repair a character split between them. Not for ISO-2022-JP,
-/// which has shift states, nor UTF-16, where a byte order mark in one word
-/// would decide the byte order of the others. Unknown labels, and charsets
-/// left to a caller's decoder, are never joined.
-pub fn can_join(label: String) -> Bool {
-  case family(normalise(label)) {
-    AsciiFamily | Latin1Family -> True
+/// joined to repair a character split between them: the multi-byte
+/// charsets without state. Not ISO-2022-JP, which has shift states, nor
+/// UTF-16, where a byte order mark in one word would decide the byte order
+/// of the others. Unknown labels are never joined.
+@internal
+pub fn can_join(charset: Charset) -> Bool {
+  case charset.family {
     Whatwg(text_encoding.Iso2022Jp)
     | Whatwg(text_encoding.Replacement)
     | Whatwg(text_encoding.Utf16Be)
     | Whatwg(text_encoding.Utf16Le) -> False
     Whatwg(_) -> True
-    Legacy | UnknownLabel -> False
-  }
-}
-
-/// For ISO-2022-JP, the escape sequence of the state that `bytes` end in,
-/// or `<<>>` when that is ASCII. `<<>>` for every other charset.
-pub fn final_state(label: String, bytes: BitArray) -> BitArray {
-  case family(normalise(label)) {
-    Whatwg(text_encoding.Iso2022Jp) -> last_escape(bytes, <<>>)
-    _ -> <<>>
-  }
-}
-
-fn last_escape(bytes: BitArray, state: BitArray) -> BitArray {
-  case bytes {
-    <<0x1B, 0x28, 0x42, rest:bytes>> -> last_escape(rest, <<>>)
-    <<0x1B, 0x28, 0x4A, rest:bytes>>
-    | <<0x1B, 0x28, 0x49, rest:bytes>>
-    | <<0x1B, 0x24, 0x40, rest:bytes>>
-    | <<0x1B, 0x24, 0x42, rest:bytes>> -> {
-      let size = bit_array.byte_size(bytes) - bit_array.byte_size(rest)
-      let assert Ok(escape) = bit_array.slice(bytes, 0, size)
-      last_escape(rest, escape)
-    }
-    <<_, rest:bytes>> -> last_escape(rest, state)
-    _ -> state
+    _ -> False
   }
 }
 
@@ -198,107 +207,231 @@ pub fn decode(
   label: Option(String),
   options: Options,
 ) -> #(Result(String, Nil), List(Kind)) {
-  let custom = case label, options.decoder {
+  let decoded = decode_charset(bytes, resolve(label), options, <<>>)
+  #(decoded.text, decoded.kinds)
+}
+
+/// The result of `decode_charset`.
+@internal
+pub type Decoded {
+  Decoded(text: Result(String, Nil), kinds: List(Kind), state: BitArray)
+}
+
+/// Decodes one of several pieces of text, as the encoded-words of a header
+/// are. `state` is what the previous piece passes on to this one: the
+/// escape sequence of the ISO-2022-JP state it ended in, or the byte order
+/// mark that decided its UTF-16 byte order, or `<<>>`. The result has the
+/// state to pass on to the next piece. Only the built-in ISO-2022-JP and
+/// UTF-16 decoders use it.
+@internal
+pub fn decode_charset(
+  bytes: BitArray,
+  charset: Charset,
+  options: Options,
+  state: BitArray,
+) -> Decoded {
+  let custom = case charset.declared, options.decoder {
     Some(label), Some(decoder) -> decoder(label, bytes)
     _, _ -> Error(Nil)
   }
-  let #(result, kinds) = case custom {
-    Ok(text) -> #(Ok(text), [])
-    Error(_) -> builtin(bytes, label, options)
+  let decoded = case custom {
+    Ok(text) -> Decoded(Ok(text), [], <<>>)
+    Error(_) -> builtin(bytes, charset, options, state)
   }
   // NUL is counted in the decoded text: a decoder (UTF-16, say) can turn
   // zero bytes into other characters.
-  case result {
+  case decoded.text {
     Ok(text) ->
       case count_nul(bit_array.from_string(text), 0) {
-        0 -> #(result, kinds)
-        n -> #(Ok(text), list.append(kinds, [diagnostic.NulInText(n)]))
+        0 -> decoded
+        n ->
+          Decoded(
+            ..decoded,
+            kinds: list.append(decoded.kinds, [diagnostic.NulInText(n)]),
+          )
       }
-    Error(_) -> #(result, kinds)
+    Error(_) -> decoded
   }
 }
 
 fn builtin(
   bytes: BitArray,
-  label: Option(String),
+  charset: Charset,
   options: Options,
-) -> #(Result(String, Nil), List(Kind)) {
-  let normalised = option.map(label, normalise)
-  let family = case normalised {
-    None -> AsciiFamily
-    Some(label) -> family(label)
-  }
-  let unsupported = fn() {
-    #(Error(Nil), [diagnostic.UnsupportedCharset(option.unwrap(normalised, ""))])
-  }
-  case family {
+  state: BitArray,
+) -> Decoded {
+  case charset.family {
     AsciiFamily ->
       case is_ascii(bytes) {
-        True -> #(bit_array.to_string(bytes), [])
-        False -> utf8_or_windows_1252(bytes, [diagnostic.NonAsciiInAscii])
+        True -> Decoded(bit_array.to_string(bytes), [], <<>>)
+        False -> utf8_or_windows_1252_state(bytes, [diagnostic.NonAsciiInAscii])
       }
     Latin1Family ->
-      override(bytes, label, options, fn() {
+      override(bytes, charset, options, 0x80, fn() {
         let text = windows_1252(bytes)
         case has_c1(bytes) {
-          True -> #(Ok(text), [diagnostic.C1ReinterpretedAsWindows1252])
-          False -> #(Ok(text), [])
+          True ->
+            Decoded(Ok(text), [diagnostic.C1ReinterpretedAsWindows1252], <<>>)
+          False -> Decoded(Ok(text), [], <<>>)
         }
       })
-    Whatwg(text_encoding.Replacement) -> unsupported()
+    Whatwg(text_encoding.Replacement) | Legacy ->
+      Decoded(Error(Nil), [diagnostic.UnsupportedCharset(charset.label)], <<>>)
     Whatwg(text_encoding.Utf8) -> {
       let #(text, errors) = utf8(utf8.strip_mark(bytes))
-      #(Ok(text), malformed(errors))
+      Decoded(Ok(text), malformed(errors), <<>>)
     }
     Whatwg(text_encoding.Utf16Be as declared)
-    | Whatwg(text_encoding.Utf16Le as declared) -> {
-      let decoded = text_encoding.decode_with(bytes, declared, SniffBom)
-      let names_order =
-        list.contains(
-          ["utf-16be", "utf-16le", "unicodefffe", "unicodefeff"],
-          option.unwrap(normalised, ""),
-        )
-      let overridden = case decoded.encoding {
-        encoding if encoding == declared -> []
-        text_encoding.Utf8 -> [overridden(label)]
-        _ if names_order -> [overridden(label)]
-        _ -> []
+    | Whatwg(text_encoding.Utf16Le as declared) ->
+      utf16(bytes, charset, declared, state)
+    Whatwg(text_encoding.Iso2022Jp) ->
+      override(bytes, charset, options, 0x80, fn() { iso_2022_jp(bytes, state) })
+    Whatwg(encoding) -> {
+      // Short CJK text is often valid two-byte UTF-8 by chance, so for a
+      // multi-byte charset the override needs a longer UTF-8 sequence.
+      let threshold = case encoding {
+        text_encoding.Gbk
+        | text_encoding.Gb18030
+        | text_encoding.Big5
+        | text_encoding.EucJp
+        | text_encoding.ShiftJis
+        | text_encoding.EucKr -> 0xE0
+        _ -> 0x80
       }
-      #(Ok(decoded.text), list.append(overridden, malformed(decoded.errors)))
-    }
-    Whatwg(encoding) ->
-      override(bytes, label, options, fn() {
+      override(bytes, charset, options, threshold, fn() {
         let #(text, errors) = whatwg(bytes, encoding)
-        #(Ok(text), malformed(errors))
+        Decoded(Ok(text), malformed(errors), <<>>)
       })
-    Legacy -> unsupported()
+    }
     UnknownLabel ->
-      utf8_or_windows_1252(bytes, [
-        diagnostic.UnknownCharset(option.unwrap(normalised, "")),
+      utf8_or_windows_1252_state(bytes, [
+        diagnostic.UnknownCharset(charset.label),
       ])
   }
 }
 
-fn override(
+/// A byte order mark decides, and is passed on to the next piece when it
+/// differs from the declared byte order. A piece without one continues in
+/// the byte order passed on to it.
+fn utf16(
   bytes: BitArray,
-  label: Option(String),
-  options: Options,
-  otherwise: fn() -> #(Result(String, Nil), List(Kind)),
-) -> #(Result(String, Nil), List(Kind)) {
-  // The flag is tested first, so the extra passes only happen when it is
-  // enabled.
-  case options.utf8_override {
-    False -> otherwise()
-    True ->
-      case is_ascii(bytes), utf8.to_string(utf8.strip_mark(bytes)) {
-        False, Ok(text) -> #(Ok(text), [overridden(label)])
-        _, _ -> otherwise()
+  charset: Charset,
+  declared: Encoding,
+  state: BitArray,
+) -> Decoded {
+  let #(bytes, continued) = case state, bytes, text_encoding.bom_sniff(bytes) {
+    <<>>, _, _ | _, <<>>, _ | _, _, Some(_) -> #(bytes, [])
+    _, _, None -> #(<<state:bits, bytes:bits>>, [
+      diagnostic.EncodedWordSplitCharacter,
+    ])
+  }
+  let decoded = text_encoding.decode_with(bytes, declared, SniffBom)
+  let names_order =
+    list.contains(
+      ["utf-16be", "utf-16le", "unicodefffe", "unicodefeff"],
+      charset.label,
+    )
+  let overridden = case decoded.encoding {
+    encoding if encoding == declared -> []
+    text_encoding.Utf8 -> [overridden(charset)]
+    _ if names_order -> [overridden(charset)]
+    _ -> []
+  }
+  let next = case bytes, decoded.encoding {
+    <<>>, _ -> state
+    _, encoding if encoding == declared -> <<>>
+    _, text_encoding.Utf16Be -> <<0xFE, 0xFF>>
+    _, text_encoding.Utf16Le -> <<0xFF, 0xFE>>
+    _, _ -> <<>>
+  }
+  Decoded(
+    Ok(decoded.text),
+    list.flatten([continued, overridden, malformed(decoded.errors)]),
+    next,
+  )
+}
+
+/// Each ISO-2022-JP piece should end in ASCII. When one does not, the next
+/// continues in its state, unless that piece begins with an escape sequence
+/// of its own, or decodes cleanly only on its own.
+fn iso_2022_jp(bytes: BitArray, state: BitArray) -> Decoded {
+  let alone = fn() {
+    let #(text, errors) = whatwg(bytes, text_encoding.Iso2022Jp)
+    Decoded(Ok(text), malformed(errors), final_state(bytes, <<>>))
+  }
+  case state, bytes, escape(bytes) {
+    _, <<>>, _ -> Decoded(Ok(""), [], state)
+    <<>>, _, _ | _, _, Ok(_) -> alone()
+    _, _, Error(_) -> {
+      let continued = <<state:bits, bytes:bits>>
+      let #(text, errors) = whatwg(continued, text_encoding.Iso2022Jp)
+      let decoded =
+        Decoded(
+          Ok(text),
+          [diagnostic.EncodedWordSplitCharacter, ..malformed(errors)],
+          final_state(continued, <<>>),
+        )
+      case errors {
+        0 -> decoded
+        _ ->
+          case alone() {
+            Decoded(kinds: [], ..) as alone -> alone
+            _ -> decoded
+          }
+      }
+    }
+  }
+}
+
+/// The escape sequence of the ISO-2022-JP state that `bytes` end in, or
+/// `<<>>` for ASCII.
+fn final_state(bytes: BitArray, state: BitArray) -> BitArray {
+  case escape(bytes) {
+    Ok(#(state, rest)) -> final_state(rest, state)
+    Error(_) ->
+      case bytes {
+        <<_, rest:bytes>> -> final_state(rest, state)
+        _ -> state
       }
   }
 }
 
-fn overridden(label: Option(String)) -> Kind {
-  diagnostic.DeclaredCharsetOverridden(option.unwrap(label, ""))
+/// An ISO-2022-JP escape sequence that selects a state, at the start of
+/// `bytes`: the state's escape sequence (`<<>>` for ASCII), and the rest.
+fn escape(bytes: BitArray) -> Result(#(BitArray, BitArray), Nil) {
+  case bytes {
+    <<0x1B, 0x28, 0x42, rest:bytes>> -> Ok(#(<<>>, rest))
+    <<0x1B, 0x28, c, rest:bytes>> if c == 0x4A || c == 0x49 ->
+      Ok(#(<<0x1B, 0x28, c>>, rest))
+    <<0x1B, 0x24, c, rest:bytes>> if c == 0x40 || c == 0x42 ->
+      Ok(#(<<0x1B, 0x24, c>>, rest))
+    _ -> Error(Nil)
+  }
+}
+
+/// With the UTF-8 override enabled, UTF-8 with a byte of at least
+/// `threshold` is decoded as UTF-8.
+fn override(
+  bytes: BitArray,
+  charset: Charset,
+  options: Options,
+  threshold: Int,
+  otherwise: fn() -> Decoded,
+) -> Decoded {
+  // The flag is tested first, so the extra passes only happen when it is
+  // enabled.
+  case options.utf8_override && has_byte_at_least(bytes, threshold) {
+    False -> otherwise()
+    True ->
+      case utf8.to_string(utf8.strip_mark(bytes)) {
+        Ok(text) -> Decoded(Ok(text), [overridden(charset)], <<>>)
+        Error(_) -> otherwise()
+      }
+  }
+}
+
+fn overridden(charset: Charset) -> Kind {
+  diagnostic.DeclaredCharsetOverridden(option.unwrap(charset.declared, ""))
 }
 
 fn malformed(errors: Int) -> List(Kind) {
@@ -306,6 +439,11 @@ fn malformed(errors: Int) -> List(Kind) {
     0 -> []
     n -> [diagnostic.MalformedCharsetData(n)]
   }
+}
+
+fn utf8_or_windows_1252_state(bytes: BitArray, kinds: List(Kind)) -> Decoded {
+  let #(text, kinds) = utf8_or_windows_1252(bytes, kinds)
+  Decoded(text, kinds, <<>>)
 }
 
 /// UTF-8 if the bytes are valid UTF-8 (a leading byte order mark is
@@ -321,9 +459,13 @@ pub fn utf8_or_windows_1252(
 }
 
 fn is_ascii(bytes: BitArray) -> Bool {
+  !has_byte_at_least(bytes, 0x80)
+}
+
+fn has_byte_at_least(bytes: BitArray, threshold: Int) -> Bool {
   case bytes {
-    <<c, rest:bytes>> if c < 0x80 -> is_ascii(rest)
-    <<>> -> True
+    <<c, _:bytes>> if c >= threshold -> True
+    <<_, rest:bytes>> -> has_byte_at_least(rest, threshold)
     _ -> False
   }
 }

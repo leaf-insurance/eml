@@ -10,7 +10,11 @@
 ////   or some content cannot be interpreted as declared. The raw bytes are
 ////   still reachable.
 
+import gleam/int
+import gleam/list
 import gleam/option.{type Option}
+import gleam/order
+import gleam/string
 
 /// A half-open byte range `[start, end)` in a message's source.
 pub type Span {
@@ -81,6 +85,8 @@ pub type Kind {
 
   // Header text, parameters and addresses (§H).
   InvalidEncodedWord(count: Int)
+  /// A character, or an ISO-2022-JP shift state or UTF-16 byte order, was
+  /// split between adjacent encoded-words, and carried across them.
   EncodedWordSplitCharacter
   AmbiguousParameter(name: String)
   MalformedParameter(name: String)
@@ -162,4 +168,53 @@ pub fn severity(kind: Kind) -> Severity {
 
 pub fn new(kind: Kind, path: List(Int), span: Option(Span)) -> Diagnostic {
   Diagnostic(kind:, severity: severity(kind), path:, span:)
+}
+
+/// Combines diagnostics: counts are added up, and other kinds are kept
+/// once, in order of first occurrence. Sorting rather than hashing keeps
+/// this O(n log n) for any labels: on JavaScript, distinct labels can be
+/// chosen to have equal hashes.
+@internal
+pub fn merge(kinds: List(Kind)) -> List(Kind) {
+  kinds
+  |> list.index_map(fn(kind, index) {
+    let #(make, count) = split_count(kind)
+    #(string.inspect(make(0)), index, make, count)
+  })
+  |> list.sort(fn(a, b) {
+    order.break_tie(string.compare(a.0, b.0), int.compare(a.1, b.1))
+  })
+  |> group([])
+  |> list.sort(fn(a, b) { int.compare(a.1, b.1) })
+  |> list.map(fn(entry) { entry.2(entry.3) })
+}
+
+/// Sums the counts of adjacent entries with the same key, keeping the
+/// first entry's position.
+fn group(
+  sorted: List(#(String, Int, fn(Int) -> Kind, Int)),
+  acc: List(#(String, Int, fn(Int) -> Kind, Int)),
+) -> List(#(String, Int, fn(Int) -> Kind, Int)) {
+  case sorted, acc {
+    [], _ -> acc
+    [entry, ..rest], [first, ..others] if entry.0 == first.0 ->
+      group(rest, [#(first.0, first.1, first.2, first.3 + entry.3), ..others])
+    [entry, ..rest], _ -> group(rest, [entry, ..acc])
+  }
+}
+
+/// A kind as its constructor and its count. A kind without a count ignores
+/// the count it is given. Every kind with a count must be listed here.
+fn split_count(kind: Kind) -> #(fn(Int) -> Kind, Int) {
+  case kind {
+    MalformedCharsetData(n) -> #(MalformedCharsetData, n)
+    NulInText(n) -> #(NulInText, n)
+    InvalidQuotedPrintable(n) -> #(InvalidQuotedPrintable, n)
+    InvalidEncodedWord(n) -> #(InvalidEncodedWord, n)
+    StrayPadding(n) -> #(StrayPadding, n)
+    InvalidBase64Characters(n) -> #(InvalidBase64Characters, n)
+    ExcessBase64Padding(n) -> #(ExcessBase64Padding, n)
+    UnencodedOctets(n) -> #(UnencodedOctets, n)
+    _ -> #(fn(_) { kind }, 0)
+  }
 }

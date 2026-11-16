@@ -200,6 +200,21 @@ pub fn unknown_encoding_leaf_test() {
   assert kinds(message) == [diagnostic.UnknownTransferEncoding("x-uuencode")]
 }
 
+/// An unknown encoding is reported for every leaf type, and a message with
+/// one is a leaf: its bytes cannot be parsed as a message.
+pub fn unknown_encoding_any_type_test() {
+  list.each(["application/octet-stream", "message/rfc822"], fn(content_type) {
+    let message =
+      parse(
+        "Content-Type: "
+        <> content_type
+        <> "\r\nContent-Transfer-Encoding: x-uuencode\r\n\r\nbegin 644 x\r\n",
+      )
+    assert eml.body(eml.root(message)) == eml.Leaf
+    assert kinds(message) == [diagnostic.UnknownTransferEncoding("x-uuencode")]
+  })
+}
+
 pub fn embedded_message_test() {
   let entity =
     root("Content-Type: message/rfc822\r\n\r\nSubject: inner\r\n\r\ninner body")

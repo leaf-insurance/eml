@@ -441,15 +441,19 @@ The rules are applied in this order (V2-M8):
    gives U+FFFD and `MalformedCharsetData` (Warning). A declared label is
    never overridden by UTF-8 sniffing, unless the caller enables
    `with_utf8_override`, which applies to every label but UTF-8 and UTF-16.
+   For the multi-byte CJK charsets it needs a UTF-8 sequence of three or
+   more bytes: about 14% of GB2312 characters are valid two-byte UTF-8 by
+   chance, and encoded-words are short.
    - Labels are normalised as WHATWG does: ASCII whitespace trimmed, ASCII
      letters lowercased, nothing else changed.
    - Mail names for the CJK code pages that WHATWG does not list are
      accepted: `cp932`, `windows-932` (Shift_JIS); `cp936`, `windows-936`,
      `ms936`, `euc-cn` (GBK); `cp949`, `ms949`, `uhc`, `x-windows-949`
      (EUC-KR); `cp950`, `ms950`, `windows-950` (Big5); `eucjp`, `euc_jp`,
-     `ujis` (EUC-JP). The ISO-2022-JP extensions (`iso-2022-jp-2` and the
-     rest) are unsupported (rule 5): they are 7-bit, so the unknown-label
-     rule would pass their escape sequences off as text.
+     `ujis` (EUC-JP). Every other ISO-2022 variant (any label starting
+     `iso-2022-`, and `cp50220` to `cp50222`) is unsupported (rule 5): they
+     are 7-bit, so the unknown-label rule would pass their escape sequences
+     off as text.
    - UTF-8: one leading byte order mark is removed.
    - UTF-16 (M3): as WHATWG. A leading byte order mark decides the byte
      order (a UTF-8 one decides UTF-8) and is removed; without one, `utf-16`
@@ -488,11 +492,18 @@ Two further rules apply:
    repaired only on failure, only for charsets whose bytes can be joined
    (not ISO-2022-JP, not UTF-16), and only within one run of adjacent words
    that share a charset (V2-m3). Test vector:
-   `=?utf-8?B?ww==?= =?utf-8?B?qQ==?=` decodes to `é`. An ISO-2022-JP word
-   that does not end in ASCII passes its shift state to the next word,
-   unless that word begins with an escape sequence, with
-   `EncodedWordSplitCharacter`. Counts in diagnostics are added up across
-   words.
+   `=?utf-8?B?ww==?= =?utf-8?B?qQ==?=` decodes to `é`. A run is a sequence
+   of words whose labels name the same charset (`utf-8` and `utf8`, say).
+   An ISO-2022-JP word that does not end in ASCII passes its shift state to
+   the next word, unless that word begins with a recognised escape sequence
+   or decodes cleanly only on its own; a UTF-16 word whose byte order mark
+   differs from the label's byte order passes it to following words without
+   one. Both are reported as `EncodedWordSplitCharacter`, and both apply
+   only to the built-in decoders: a caller's decoder and the UTF-8 override
+   see each word's own bytes. A UTF-16 code unit split between words is not
+   repaired. Counts in diagnostics are added up within one decoded text (a
+   header value, or one phrase of an address), and merging sorts rather
+   than hashes, so chosen labels cannot make it quadratic.
 4. RFC 2231 (V2-M9). Raw sections are kept, without enumerating their
    combinations. The result is one of `Resolved(value)`, `Ambiguous`,
    `Malformed` or `Unsupported`:

@@ -243,3 +243,41 @@ fn bit_array_to_string(bytes: BitArray) -> String {
   let assert Ok(text) = bit_array.to_string(bytes)
   text
 }
+
+/// pi-r4-4: every ISO-2022 variant that is not decoded is unsupported.
+pub fn iso_2022_variants_unsupported_test() {
+  let bytes = <<0x1B, 0x24, 0x42, 0x24, 0x22, 0x1B, 0x28, 0x42>>
+  list.each(
+    ["iso-2022-jp-ms", "iso-2022-jp-3", "iso-2022-cn-ext", "cp50220", "cp50221"],
+    fn(label) {
+      assert decode(bytes, label)
+        == #(Error(Nil), [diagnostic.UnsupportedCharset(label)])
+    },
+  )
+}
+
+/// fable-r4-E2: for a multi-byte charset the override needs a UTF-8
+/// sequence of three or more bytes; short CJK text is often valid two-byte
+/// UTF-8 by chance.
+pub fn utf8_override_needs_long_sequence_test() {
+  let options = charset.default_options() |> charset.with_utf8_override(True)
+  assert charset.decode(<<0xC5, 0xA3>>, Some("gb2312"), options)
+    == #(Ok("牛"), [])
+  assert charset.decode(<<0xC5, 0xA3>>, Some("big5"), options) == #(Ok("籟"), [])
+  // ISO-2022-JP and ASCII text is never overridden.
+  assert charset.decode(
+      <<0x1B, 0x24, 0x42, 0x24, 0x22, 0x1B, 0x28, 0x42>>,
+      Some("iso-2022-jp"),
+      options,
+    )
+    == #(Ok("あ"), [])
+  assert charset.decode(<<"abc">>, Some("shift_jis"), options)
+    == #(Ok("abc"), [])
+}
+
+pub fn unicodefffe_byte_order_mark_test() {
+  assert decode(<<0xFF, 0xFE, 0x41, 0>>, "unicodefffe")
+    == #(Ok("A"), [diagnostic.DeclaredCharsetOverridden("unicodefffe")])
+  assert decode(<<0xFE, 0xFF, 0, 0x41>>, "unicodefeff")
+    == #(Ok("A"), [diagnostic.DeclaredCharsetOverridden("unicodefeff")])
+}

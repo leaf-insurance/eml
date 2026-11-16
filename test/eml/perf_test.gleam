@@ -258,3 +258,26 @@ pub fn long_dotted_local_part_test() {
     fn(input) { address.parse(input, charset.default_options()) },
   )
 }
+
+/// pi-r4-1: distinct labels whose JavaScript string hashes collide ("a~"
+/// and "b_" hash alike) must not make merging diagnostics quadratic.
+pub fn colliding_charset_labels_test() {
+  assert_linear(
+    "colliding charset labels",
+    fn(k) {
+      int.range(0, k * 512, [], fn(acc, i) {
+        let label =
+          int.range(0, 13, "x-", fn(label, bit) {
+            case int.bitwise_and(int.bitwise_shift_right(i, bit), 1) {
+              1 -> label <> "a~"
+              _ -> label <> "b_"
+            }
+          })
+        ["=?" <> label <> "?Q?x?=", ..acc]
+      })
+      |> string.join(" ")
+      |> bit_array.from_string
+    },
+    fn(input) { encoded_word.decode(input, charset.default_options()) },
+  )
+}

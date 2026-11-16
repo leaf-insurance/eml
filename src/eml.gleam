@@ -19,6 +19,7 @@ import eml/internal/base64
 import eml/internal/parser.{type Node}
 import eml/internal/quoted_printable
 import eml/internal/structured.{slice}
+import eml/internal/utf8
 import eml/mime.{
   type ContentType, type Header, type Lookup, type OpaqueReason, type ParseError,
   type Segment, type TransferEncoding,
@@ -790,7 +791,7 @@ pub fn decode_text_with(
 pub fn charset_label(entity: Entity) -> Option(String) {
   case list.key_find(entity.node.content_type.parameters, "charset") {
     Ok(label) ->
-      case bit_array.to_string(label) {
+      case utf8.to_string(label) {
         Ok(label) -> Some(label)
         Error(_) -> Some(string.inspect(label))
       }

@@ -15,7 +15,6 @@ import eml/internal/quoted_printable
 import eml/internal/structured.{slice}
 import eml/internal/utf8
 import gleam/bit_array
-import gleam/dict
 import gleam/list
 import gleam/option.{Some}
 import gleam/result
@@ -41,7 +40,7 @@ pub fn decode(
   let tokens =
     drop_whitespace_between_words(tokenise(value, value, 0, 0, False, []))
   let #(parts, kinds) = decode_tokens(tokens, options, [], [])
-  #(string.concat(parts), merge(kinds))
+  #(string.concat(parts), diagnostic.merge(kinds))
 }
 
 // ---------------------------------------------------------------------------
@@ -112,14 +111,10 @@ fn encoded_word(
           case until_end(text, 0) {
             Ok(text_length) -> {
               // A language suffix (RFC 2231 §5) is dropped.
-              let label = case
-                string.split_once(
-                  result.unwrap(bit_array.to_string(label), ""),
-                  "*",
-                )
-              {
+              let label = result.unwrap(utf8.to_string(label), "")
+              let label = case string.split_once(label, "*") {
                 Ok(#(label, _)) -> label
-                Error(_) -> result.unwrap(bit_array.to_string(label), "")
+                Error(_) -> label
               }
               Ok(#(
                 label,
@@ -189,8 +184,9 @@ fn decode_tokens(
       decode_tokens(rest, options, [text, ..parts], [text_kinds, ..kinds])
     }
     [Word(charset: label, ..), ..] -> {
-      let #(run, rest) = take_run(tokens, charset.normalise(label), [])
-      let #(text, run_kinds) = decode_run(run, label, options)
+      let charset = charset.resolve(Some(label))
+      let #(run, rest) = take_run(tokens, charset, [])
+      let #(text, run_kinds) = decode_run(run, charset, options)
       decode_tokens(rest, options, [text, ..parts], [run_kinds, ..kinds])
     }
   }
@@ -214,18 +210,18 @@ type Bytes {
   Undecodable
 }
 
-/// Takes the run of adjacent words whose charset normalises to `label`, as
-/// each word's raw bytes and its decoded bytes.
+/// Takes the run of adjacent words in `charset`, as each word's raw bytes
+/// and its decoded bytes. The first token is a word in `charset`.
 fn take_run(
   tokens: List(Token),
-  label: String,
+  charset: charset.Charset,
   acc: List(#(BitArray, Bytes)),
 ) -> #(List(#(BitArray, Bytes)), List(Token)) {
   case tokens {
-    [Word(charset: other, encoding:, text:, raw:), ..rest] ->
-      case charset.normalise(other) == label {
+    [Word(charset: label, encoding:, text:, raw:), ..rest] ->
+      case acc == [] || charset.same(charset.resolve(Some(label)), charset) {
         True ->
-          take_run(rest, label, [#(raw, word_bytes(encoding, text)), ..acc])
+          take_run(rest, charset, [#(raw, word_bytes(encoding, text)), ..acc])
         False -> #(list.reverse(acc), tokens)
       }
     _ -> #(list.reverse(acc), tokens)
@@ -258,17 +254,18 @@ fn word_bytes(encoding: Int, text: BitArray) -> Bytes {
   }
 }
 
-/// Decodes a run of words in the charset `label`, as the first word
-/// declares it.
+/// Decodes a run of words in one charset, as the first word declares it.
 fn decode_run(
   run: List(#(BitArray, Bytes)),
-  label: String,
+  charset: charset.Charset,
   options: charset.Options,
 ) -> #(String, List(Kind)) {
-  let run = continue_states(run, label, <<>>, [])
-  // 1. Each word on its own, replacing malformed data. A word that cannot
-  // be decoded at all is kept literally.
-  let words = list.map(run, decode_word(_, label, options))
+  // 1. Each word on its own, replacing malformed data, passing on the shift
+  // state or byte order. A word that cannot be decoded is kept literally.
+  let #(_, words) =
+    list.map_fold(run, <<>>, fn(state, entry) {
+      decode_word(entry, charset, options, state)
+    })
   let text = string.concat(list.map(words, fn(word) { word.0 }))
   let kinds = list.flat_map(words, fn(word) { word.1 })
   case list.all(words, fn(word) { word.2 }) {
@@ -277,7 +274,7 @@ fn decode_run(
       // 2. When a word is not clean, and the charset's bytes can be joined,
       // the bytes of all the words together, to repair a multi-byte
       // character split between them. 3. Otherwise the words on their own.
-      case join(run, label, options) {
+      case join(run, charset, options) {
         Ok(joined) -> joined
         Error(_) ->
           case list.count(run, fn(entry) { entry.1 == Undecodable }) {
@@ -288,28 +285,28 @@ fn decode_run(
   }
 }
 
-/// Decodes one word. Returns the text, the diagnostics, and whether it was
+/// Decodes one word, given the state the word before passes on. Returns
+/// the state to pass on, and the text, the diagnostics, and whether it was
 /// decoded without replacing malformed data.
 fn decode_word(
   entry: #(BitArray, Bytes),
-  label: String,
+  charset: charset.Charset,
   options: charset.Options,
-) -> #(String, List(Kind), Bool) {
+  state: BitArray,
+) -> #(BitArray, #(String, List(Kind), Bool)) {
   case entry.1 {
-    Decoded(bytes, transfer) ->
-      case charset.decode(bytes, Some(label), options) {
-        #(Ok(text), kinds) -> #(
-          text,
-          list.append(transfer, kinds),
-          !list.any(kinds, is_malformed),
+    Decoded(bytes, transfer) -> {
+      let decoded = charset.decode_charset(bytes, charset, options, state)
+      let kinds = list.append(transfer, decoded.kinds)
+      case decoded.text {
+        Ok(text) -> #(
+          decoded.state,
+          #(text, kinds, !list.any(decoded.kinds, is_malformed)),
         )
-        #(Error(_), kinds) -> #(
-          raw_text(entry.0).0,
-          list.append(transfer, kinds),
-          False,
-        )
+        Error(_) -> #(decoded.state, #(raw_text(entry.0).0, kinds, False))
       }
-    Undecodable -> #(raw_text(entry.0).0, [], False)
+    }
+    Undecodable -> #(<<>>, #(raw_text(entry.0).0, [], False))
   }
 }
 
@@ -317,7 +314,7 @@ fn decode_word(
 /// malformed data.
 fn join(
   run: List(#(BitArray, Bytes)),
-  label: String,
+  charset: charset.Charset,
   options: charset.Options,
 ) -> Result(#(String, List(Kind)), Nil) {
   let decoded =
@@ -327,11 +324,11 @@ fn join(
         Undecodable -> Error(Nil)
       }
     })
-  case decoded, charset.can_join(label) {
+  case decoded, charset.can_join(charset) {
     Ok([_, _, ..] as decoded), True -> {
       let bytes = bit_array.concat(list.map(decoded, fn(word) { word.0 }))
-      case charset.decode(bytes, Some(label), options) {
-        #(Ok(text), kinds) ->
+      case charset.decode_charset(bytes, charset, options, <<>>) {
+        charset.Decoded(Ok(text), kinds, _) ->
           case list.any(kinds, is_malformed) {
             True -> Error(Nil)
             False -> {
@@ -344,7 +341,7 @@ fn join(
               )
             }
           }
-        #(Error(_), _) -> Error(Nil)
+        _ -> Error(Nil)
       }
     }
     _, _ -> Error(Nil)
@@ -355,79 +352,6 @@ fn is_malformed(kind: Kind) -> Bool {
   case kind {
     diagnostic.MalformedCharsetData(_) -> True
     _ -> False
-  }
-}
-
-/// Each ISO-2022-JP word should end in ASCII. When one ends in another
-/// state, the next word continues in that state, unless it begins with an
-/// escape sequence of its own.
-fn continue_states(
-  run: List(#(BitArray, Bytes)),
-  label: String,
-  state: BitArray,
-  acc: List(#(BitArray, Bytes)),
-) -> List(#(BitArray, Bytes)) {
-  case run {
-    [] -> list.reverse(acc)
-    [#(raw, Decoded(bytes, kinds)), ..rest] -> {
-      let #(bytes, kinds) = case state, bytes {
-        <<>>, _ | _, <<0x1B, _:bytes>> -> #(bytes, kinds)
-        _, _ -> #(<<state:bits, bytes:bits>>, [
-          diagnostic.EncodedWordSplitCharacter,
-          ..kinds
-        ])
-      }
-      continue_states(rest, label, charset.final_state(label, bytes), [
-        #(raw, Decoded(bytes, kinds)),
-        ..acc
-      ])
-    }
-    [entry, ..rest] -> continue_states(rest, label, <<>>, [entry, ..acc])
-  }
-}
-
-/// Combines the diagnostics of all the words: counts are added up, and
-/// other kinds are kept once, in order of first occurrence.
-fn merge(kinds: List(Kind)) -> List(Kind) {
-  let #(order, counts) =
-    list.fold(kinds, #([], dict.new()), fn(acc, kind) {
-      let #(order, counts) = acc
-      let #(make, n) = split_count(kind)
-      let key = make(0)
-      case dict.get(counts, key) {
-        Ok(#(_, total)) -> #(
-          order,
-          dict.insert(counts, key, #(make, total + n)),
-        )
-        Error(_) -> #([key, ..order], dict.insert(counts, key, #(make, n)))
-      }
-    })
-  list.reverse(order)
-  |> list.map(fn(key) {
-    let assert Ok(#(make, n)) = dict.get(counts, key)
-    make(n)
-  })
-}
-
-/// A kind as its constructor and its count. A kind without a count ignores
-/// the count it is given.
-fn split_count(kind: Kind) -> #(fn(Int) -> Kind, Int) {
-  case kind {
-    diagnostic.MalformedCharsetData(n) -> #(diagnostic.MalformedCharsetData, n)
-    diagnostic.NulInText(n) -> #(diagnostic.NulInText, n)
-    diagnostic.InvalidQuotedPrintable(n) -> #(
-      diagnostic.InvalidQuotedPrintable,
-      n,
-    )
-    diagnostic.InvalidEncodedWord(n) -> #(diagnostic.InvalidEncodedWord, n)
-    diagnostic.StrayPadding(n) -> #(diagnostic.StrayPadding, n)
-    diagnostic.InvalidBase64Characters(n) -> #(
-      diagnostic.InvalidBase64Characters,
-      n,
-    )
-    diagnostic.ExcessBase64Padding(n) -> #(diagnostic.ExcessBase64Padding, n)
-    diagnostic.UnencodedOctets(n) -> #(diagnostic.UnencodedOctets, n)
-    _ -> #(fn(_) { kind }, 0)
   }
 }
 

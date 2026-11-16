@@ -134,8 +134,8 @@ pub fn no_repair_for_stateful_charsets_test() {
       <<"=?iso-2022-jp?Q?=1B$B$?= =?iso-2022-jp?Q?=22=1B(B?=">>,
       options,
     )
-  assert text == "\u{FFFD}\u{FFFD}"
-  assert list.contains(kinds, diagnostic.MalformedCharsetData(2))
+  assert text == "\u{FFFD}\""
+  assert list.contains(kinds, diagnostic.MalformedCharsetData(1))
 }
 
 /// fable-F18: an encoded leading space is kept; only raw whitespace is
@@ -430,4 +430,19 @@ pub fn accessors_with_charset_options_test() {
   assert eml.filename_with(entity, options) == Some("custom")
   // Without the decoder, the built-in ISO-2022-JP decoder is used.
   assert eml.subject(entity) == mime.Single("件名")
+}
+
+/// pi-r4-3: a byte order mark in a Content-Type charset label is kept on
+/// both targets, so the label is unknown on both.
+pub fn content_type_label_with_byte_order_mark_test() {
+  let input = <<
+    "Content-Type: text/plain; charset=\"\u{FEFF}utf-16le\"\n\n":utf8,
+    65,
+    0,
+  >>
+  let assert Ok(message) = eml.parse(input)
+  let #(text, diagnostics) = eml.decode_text(eml.root(message))
+  assert text == Ok("A\u{0000}")
+  assert list.map(diagnostics, fn(d) { d.kind })
+    == [diagnostic.UnknownCharset("\u{FEFF}utf-16le"), diagnostic.NulInText(1)]
 }
