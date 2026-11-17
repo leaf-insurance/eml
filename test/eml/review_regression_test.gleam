@@ -134,8 +134,8 @@ pub fn no_repair_for_stateful_charsets_test() {
       <<"=?iso-2022-jp?Q?=1B$B$?= =?iso-2022-jp?Q?=22=1B(B?=">>,
       options,
     )
-  assert text == "\u{FFFD}\""
-  assert list.contains(kinds, diagnostic.MalformedCharsetData(1))
+  assert text == "\u{FFFD}\u{FFFD}"
+  assert list.contains(kinds, diagnostic.MalformedCharsetData(2))
 }
 
 /// fable-F18: an encoded leading space is kept; only raw whitespace is

@@ -147,7 +147,7 @@ pub fn word_diagnostics_in_order_test() {
 pub fn no_repair_for_iso_2022_jp_test() {
   let #(text, _) =
     decode(<<"=?iso-2022-jp?Q?=1B$B$?= =?iso-2022-jp?Q?=22=1B(B?=">>)
-  assert text == "\u{FFFD}\""
+  assert text == "\u{FFFD}\u{FFFD}"
 }
 
 /// pi-r4-2: the shift state continues only into words that the built-in
@@ -185,10 +185,23 @@ pub fn invalid_escape_keeps_inherited_state_test() {
       "=?iso-2022-jp?Q?=1B$B$=22?= =?iso-2022-jp?B?!!!?= =?iso-2022-jp?Q?$$?=",
     >>)
   assert string.ends_with(text, "$$")
-  // A word that decodes cleanly on its own is not garbled by the state.
-  let #(text, _) =
-    decode(<<"=?iso-2022-jp?Q?=1B$B$=22?= =?iso-2022-jp?Q?_abc?=">>)
-  assert text == "あ abc"
+}
+
+/// fable-r5-E1, pi-r5: a word that continues a shift state is decoded in
+/// it, even when it would decode cleanly on its own, as Python does. Japanese
+/// text is never silently read as ASCII.
+pub fn iso_2022_jp_state_continues_despite_errors_test() {
+  // い, an emoji WHATWG lacks (0x7521), う.
+  assert decode(<<
+      "=?iso-2022-jp?B?GyRCJCI=?= =?iso-2022-jp?B?JCR1ISQmGyhC?=",
+    >>)
+    == #("あい\u{FFFD}う", [
+      diagnostic.EncodedWordSplitCharacter,
+      diagnostic.MalformedCharsetData(1),
+    ])
+  // Katakana is a state too.
+  assert decode(<<"=?iso-2022-jp?B?GyhJMQ==?= =?iso-2022-jp?B?MjM=?=">>)
+    == #("ｱｲｳ", [diagnostic.EncodedWordSplitCharacter])
 }
 
 /// fable-r4-E1: a UTF-16 word without a byte order mark continues in the
@@ -212,5 +225,127 @@ pub fn label_with_byte_order_mark_test() {
     == #("A\u{0000}", [
       diagnostic.UnknownCharset("\u{FEFF}utf-16le"),
       diagnostic.NulInText(1),
+    ])
+}
+
+/// pi-r5-1, fable-r5-E2: each word of a run is decoded with its own label.
+pub fn words_keep_their_labels_test() {
+  let options =
+    charset.default_options()
+    |> charset.with_decoder(fn(label, _) {
+      case label {
+        "cp932" -> Ok("CUSTOM")
+        _ -> Error(Nil)
+      }
+    })
+  assert encoded_word.decode(<<"=?shift_jis?Q?A?= =?cp932?Q?B?=">>, options)
+    == #("ACUSTOM", [])
+  assert encoded_word.decode(<<"=?cp932?Q?A?= =?shift_jis?Q?B?=">>, options)
+    == #("CUSTOMB", [])
+  // A label that names a byte order does not inherit one.
+  assert decode(<<"=?utf-16?B?/v8AQQ==?= =?utf-16le?B?QgA=?=">>) == #("AB", [])
+  assert decode(<<"=?utf-16?B?/v8AQQ==?= =?utf-16le?B?/v8AQg==?=">>)
+    == #("AB", [diagnostic.DeclaredCharsetOverridden("utf-16le")])
+  assert decode(<<"=?utf-16le?B?QQA=?= =?utf-16?B?/v8AQg==?=">>) == #("AB", [])
+}
+
+/// pi-r5-2: repairing a split character does not change the words around
+/// it: a UTF-8 byte order mark at the start of a word is still dropped, and
+/// a word the caller's decoder decoded is kept.
+pub fn repair_keeps_other_words_test() {
+  assert decode(<<"=?utf-8?Q?=C3?= =?utf-8?Q?=A9?= =?utf-8?B?77u/Qg==?=">>)
+    == #("éB", [diagnostic.EncodedWordSplitCharacter])
+  let options =
+    charset.default_options()
+    |> charset.with_decoder(fn(_, bytes) {
+      case bytes {
+        <<"A">> -> Ok("CUSTOM")
+        _ -> Error(Nil)
+      }
+    })
+  assert encoded_word.decode(
+      <<"=?utf-8?Q?A?= =?utf-8?Q?=C3?= =?utf-8?Q?=A9?=">>,
+      options,
+    )
+    == #("CUSTOMé", [diagnostic.EncodedWordSplitCharacter])
+}
+
+/// fable-r5-E3: the UTF-8 override is decided for a run of words together.
+pub fn utf8_override_per_run_test() {
+  let override = charset.default_options() |> charset.with_utf8_override(True)
+  let decode = encoded_word.decode(_, override)
+  assert decode(<<"=?gbk?Q?Caf=C3=A9_?= =?gbk?Q?=E4=B8=AD=E6=96=87?=">>)
+    == #("Café 中文", [diagnostic.DeclaredCharsetOverridden("gbk")])
+  assert decode(<<"=?gb2312?Q?=E4=B8=AD=E6=96=87_?= =?gb2312?Q?Ren=C3=A9?=">>)
+    == #("中文 René", [diagnostic.DeclaredCharsetOverridden("gb2312")])
+  // A character split between words.
+  assert decode(<<"=?gbk?Q?=E4=B8?= =?gbk?Q?=AD=E6?= =?gbk?Q?=96=87?=">>)
+    == #("中文", [diagnostic.DeclaredCharsetOverridden("gbk")])
+  // Two-byte UTF-8 alone is not enough for a CJK charset.
+  assert decode(<<"=?shift_jis?B?xaM=?=">>) == #("ﾅ｣", [])
+  // ISO-2022-JP still decides word by word: its words are 7-bit, so valid
+  // UTF-8 whatever they mean.
+  assert decode(<<
+      "=?iso-2022-jp?Q?=1B$B$=22=1B(B?= =?iso-2022-jp?Q?=C3=A9?=",
+    >>)
+    == #("あé", [diagnostic.DeclaredCharsetOverridden("iso-2022-jp")])
+}
+
+/// fable-r5-E4: an undecodable word's diagnostic is in order.
+pub fn invalid_encoded_word_in_order_test() {
+  assert decode(<<"=?utf-8?Q?=00?= =?utf-8?B?!!?=">>)
+    == #("\u{0}=?utf-8?B?!!?=", [
+      diagnostic.NulInText(1),
+      diagnostic.InvalidEncodedWord(1),
+    ])
+}
+
+/// fable-r5-E6: state transitions the suite did not pin.
+pub fn state_transitions_test() {
+  // An empty word keeps the state.
+  assert decode(<<
+      "=?iso-2022-jp?Q?=1B$B$\"?= =?iso-2022-jp?Q??= =?iso-2022-jp?Q?$$?=",
+    >>)
+    == #("あい", [diagnostic.EncodedWordSplitCharacter])
+  assert decode(<<"=?utf-16?B?/v8=?= =?utf-16?Q??= =?utf-16?B?AEI=?=">>)
+    == #("B", [diagnostic.EncodedWordSplitCharacter])
+  // A byte order mark that agrees with the label resets the byte order.
+  assert decode(<<
+      "=?utf-16?B?/v8AQQ==?= =?utf-16?B?//5CAA==?= =?utf-16?B?QwA=?=",
+    >>)
+    == #("ABC", [])
+  // A little-endian mark is passed on under a big-endian label.
+  assert decode(<<"=?utf-16be?B?//5BAA==?= =?utf-16be?B?QgA=?=">>)
+    == #("AB", [
+      diagnostic.DeclaredCharsetOverridden("utf-16be"),
+      diagnostic.EncodedWordSplitCharacter,
+    ])
+  // A word the caller's decoder decodes passes on no state.
+  let options =
+    charset.default_options()
+    |> charset.with_decoder(fn(_, bytes) {
+      case bytes {
+        <<"X">> -> Ok("CUSTOM")
+        _ -> Error(Nil)
+      }
+    })
+  assert encoded_word.decode(
+      <<
+        "=?iso-2022-jp?Q?=1B$B$=22?= =?iso-2022-jp?Q?X?= =?iso-2022-jp?Q?$$?=",
+      >>,
+      options,
+    )
+    == #("あCUSTOM$$", [])
+  // NUL counts add up.
+  assert decode(<<"=?utf-8?Q?=00?= =?utf-8?Q?=00?=">>)
+    == #("\u{0}\u{0}", [diagnostic.NulInText(2)])
+}
+
+/// fable-r5-E6: merged counts take the position of their first occurrence.
+pub fn merged_counts_keep_first_position_test() {
+  assert decode(<<"=?utf-8?B?/w==?= =?iso-8859-1?Q?=80?= =?utf-8?B?/w==?=">>)
+    == #("\u{FFFD}€\u{FFFD}", [
+      diagnostic.MalformedCharsetData(2),
+      diagnostic.C1ReinterpretedAsWindows1252,
     ])
 }

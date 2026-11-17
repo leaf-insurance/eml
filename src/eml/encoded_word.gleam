@@ -183,10 +183,9 @@ fn decode_tokens(
       let #(text, text_kinds) = raw_text(bytes)
       decode_tokens(rest, options, [text, ..parts], [text_kinds, ..kinds])
     }
-    [Word(charset: label, ..), ..] -> {
-      let charset = charset.resolve(Some(label))
-      let #(run, rest) = take_run(tokens, charset, [])
-      let #(text, run_kinds) = decode_run(run, charset, options)
+    [Word(..), ..] -> {
+      let #(run, rest) = take_run(tokens, [])
+      let #(text, run_kinds) = decode_run(run, options)
       decode_tokens(rest, options, [text, ..parts], [run_kinds, ..kinds])
     }
   }
@@ -210,20 +209,25 @@ type Bytes {
   Undecodable
 }
 
-/// Takes the run of adjacent words in `charset`, as each word's raw bytes
-/// and its decoded bytes. The first token is a word in `charset`.
+/// Takes the run of adjacent words in one charset, as each word's raw
+/// bytes, its decoded bytes and its charset. The first token is a word.
 fn take_run(
   tokens: List(Token),
-  charset: charset.Charset,
-  acc: List(#(BitArray, Bytes)),
-) -> #(List(#(BitArray, Bytes)), List(Token)) {
+  acc: List(#(BitArray, Bytes, charset.Charset)),
+) -> #(List(#(BitArray, Bytes, charset.Charset)), List(Token)) {
   case tokens {
-    [Word(charset: label, encoding:, text:, raw:), ..rest] ->
-      case acc == [] || charset.same(charset.resolve(Some(label)), charset) {
+    [Word(charset: label, encoding:, text:, raw:), ..rest] -> {
+      let charset = charset.resolve(Some(label))
+      let same = case acc {
+        [] -> True
+        [previous, ..] -> charset.same(charset, previous.2)
+      }
+      case same {
         True ->
-          take_run(rest, charset, [#(raw, word_bytes(encoding, text)), ..acc])
+          take_run(rest, [#(raw, word_bytes(encoding, text), charset), ..acc])
         False -> #(list.reverse(acc), tokens)
       }
+    }
     _ -> #(list.reverse(acc), tokens)
   }
 }
@@ -254,97 +258,112 @@ fn word_bytes(encoding: Int, text: BitArray) -> Bytes {
   }
 }
 
-/// Decodes a run of words in one charset, as the first word declares it.
+/// A word decoded on its own: its text, the recoveries made decoding its
+/// transfer encoding, and the others. `piece` has its bytes and charset
+/// when the built-in decoders decoded it, to decode it together with its
+/// neighbours.
+type DecodedWord {
+  DecodedWord(
+    text: String,
+    transfer: List(Kind),
+    kinds: List(Kind),
+    piece: Result(#(BitArray, charset.Charset), Nil),
+  )
+}
+
+/// Decodes a run of words in one charset.
 fn decode_run(
-  run: List(#(BitArray, Bytes)),
-  charset: charset.Charset,
+  run: List(#(BitArray, Bytes, charset.Charset)),
   options: charset.Options,
 ) -> #(String, List(Kind)) {
   // 1. Each word on its own, replacing malformed data, passing on the shift
-  // state or byte order. A word that cannot be decoded is kept literally.
+  // state or byte order.
   let #(_, words) =
     list.map_fold(run, <<>>, fn(state, entry) {
-      decode_word(entry, charset, options, state)
+      decode_word(entry, options, state)
     })
-  let text = string.concat(list.map(words, fn(word) { word.0 }))
-  let kinds = list.flat_map(words, fn(word) { word.1 })
-  case list.all(words, fn(word) { word.2 }) {
-    True -> #(text, kinds)
-    False ->
-      // 2. When a word is not clean, and the charset's bytes can be joined,
-      // the bytes of all the words together, to repair a multi-byte
-      // character split between them. 3. Otherwise the words on their own.
-      case join(run, charset, options) {
-        Ok(joined) -> joined
-        Error(_) ->
-          case list.count(run, fn(entry) { entry.1 == Undecodable }) {
-            0 -> #(text, kinds)
-            n -> #(text, [diagnostic.InvalidEncodedWord(n), ..kinds])
-          }
-      }
+  // 2. Each stretch of words the built-in decoders decoded, together, when
+  // the UTF-8 override applies to it, or when that repairs a multi-byte
+  // character split between them.
+  stretches(words, options, [], [])
+}
+
+fn stretches(
+  words: List(DecodedWord),
+  options: charset.Options,
+  texts: List(String),
+  kinds: List(List(Kind)),
+) -> #(String, List(Kind)) {
+  case list.split_while(words, fn(word) { result.is_ok(word.piece) }) {
+    #([], []) -> #(
+      string.concat(list.reverse(texts)),
+      list.flatten(list.reverse(kinds)),
+    )
+    #([], [word, ..rest]) ->
+      stretches(rest, options, [word.text, ..texts], [
+        list.append(word.transfer, word.kinds),
+        ..kinds
+      ])
+    #(stretch, rest) -> {
+      let #(text, stretch_kinds) = decode_stretch(stretch, options)
+      stretches(rest, options, [text, ..texts], [stretch_kinds, ..kinds])
+    }
+  }
+}
+
+fn decode_stretch(
+  words: List(DecodedWord),
+  options: charset.Options,
+) -> #(String, List(Kind)) {
+  let repair = list.any(words, fn(word) { list.any(word.kinds, is_malformed) })
+  case
+    charset.decode_together(
+      list.filter_map(words, fn(word) { word.piece }),
+      options,
+      repair,
+    )
+  {
+    Ok(charset.Decoded(text: Ok(text), kinds:, ..)) -> #(
+      text,
+      list.append(list.flat_map(words, fn(word) { word.transfer }), kinds),
+    )
+    _ -> #(
+      string.concat(list.map(words, fn(word) { word.text })),
+      list.flat_map(words, fn(word) { list.append(word.transfer, word.kinds) }),
+    )
   }
 }
 
 /// Decodes one word, given the state the word before passes on. Returns
-/// the state to pass on, and the text, the diagnostics, and whether it was
-/// decoded without replacing malformed data.
+/// the state to pass on, and the word. A word that cannot be decoded is
+/// kept literally.
 fn decode_word(
-  entry: #(BitArray, Bytes),
-  charset: charset.Charset,
+  entry: #(BitArray, Bytes, charset.Charset),
   options: charset.Options,
   state: BitArray,
-) -> #(BitArray, #(String, List(Kind), Bool)) {
-  case entry.1 {
+) -> #(BitArray, DecodedWord) {
+  let #(raw, bytes, charset) = entry
+  case bytes {
     Decoded(bytes, transfer) -> {
-      let decoded = charset.decode_charset(bytes, charset, options, state)
-      let kinds = list.append(transfer, decoded.kinds)
-      case decoded.text {
-        Ok(text) -> #(
-          decoded.state,
-          #(text, kinds, !list.any(decoded.kinds, is_malformed)),
-        )
-        Error(_) -> #(decoded.state, #(raw_text(entry.0).0, kinds, False))
+      let decoded = charset.decode_word(bytes, charset, options, state)
+      let word = case decoded.text, decoded.custom {
+        Ok(text), False ->
+          DecodedWord(text, transfer, decoded.kinds, Ok(#(bytes, charset)))
+        Ok(text), True -> DecodedWord(text, transfer, decoded.kinds, Error(Nil))
+        Error(_), _ ->
+          DecodedWord(raw_text(raw).0, transfer, decoded.kinds, Error(Nil))
       }
+      #(decoded.state, word)
     }
-    Undecodable -> #(<<>>, #(raw_text(entry.0).0, [], False))
-  }
-}
-
-/// Decodes the bytes of two or more words together, without replacing
-/// malformed data.
-fn join(
-  run: List(#(BitArray, Bytes)),
-  charset: charset.Charset,
-  options: charset.Options,
-) -> Result(#(String, List(Kind)), Nil) {
-  let decoded =
-    list.try_map(run, fn(entry) {
-      case entry.1 {
-        Decoded(bytes, kinds) -> Ok(#(bytes, kinds))
-        Undecodable -> Error(Nil)
-      }
-    })
-  case decoded, charset.can_join(charset) {
-    Ok([_, _, ..] as decoded), True -> {
-      let bytes = bit_array.concat(list.map(decoded, fn(word) { word.0 }))
-      case charset.decode_charset(bytes, charset, options, <<>>) {
-        charset.Decoded(Ok(text), kinds, _) ->
-          case list.any(kinds, is_malformed) {
-            True -> Error(Nil)
-            False -> {
-              let transfer = list.flat_map(decoded, fn(word) { word.1 })
-              Ok(
-                #(text, [
-                  diagnostic.EncodedWordSplitCharacter,
-                  ..list.append(transfer, kinds)
-                ]),
-              )
-            }
-          }
-        _ -> Error(Nil)
-      }
-    }
-    _, _ -> Error(Nil)
+    Undecodable -> #(
+      <<>>,
+      DecodedWord(
+        raw_text(raw).0,
+        [],
+        [diagnostic.InvalidEncodedWord(1)],
+        Error(Nil),
+      ),
+    )
   }
 }
 

@@ -443,7 +443,10 @@ The rules are applied in this order (V2-M8):
    `with_utf8_override`, which applies to every label but UTF-8 and UTF-16.
    For the multi-byte CJK charsets it needs a UTF-8 sequence of three or
    more bytes: about 14% of GB2312 characters are valid two-byte UTF-8 by
-   chance, and encoded-words are short.
+   chance, and encoded-words are short. Even so, a short Shift_JIS name
+   can be misread. The adjacent encoded-words of a run (§H.3) are decided
+   together, so that a run is not overridden in one word and not the next,
+   except in ISO-2022-JP, whose words are 7-bit and so always valid UTF-8.
    - Labels are normalised as WHATWG does: ASCII whitespace trimmed, ASCII
      letters lowercased, nothing else changed.
    - Mail names for the CJK code pages that WHATWG does not list are
@@ -493,15 +496,25 @@ Two further rules apply:
    (not ISO-2022-JP, not UTF-16), and only within one run of adjacent words
    that share a charset (V2-m3). Test vector:
    `=?utf-8?B?ww==?= =?utf-8?B?qQ==?=` decodes to `é`. A run is a sequence
-   of words whose labels name the same charset (`utf-8` and `utf8`, say).
+   of words whose labels name the same charset (`utf-8` and `utf8`, say),
+   but each word is decoded with its own label, so a caller's decoder sees
+   the label each word declares. Only stretches of words that the built-in
+   decoders decoded are joined, so a word the caller's decoder decoded, or
+   one that cannot be decoded, is kept as it is, and a UTF-8 byte order
+   mark is removed from the start of each word.
    An ISO-2022-JP word that does not end in ASCII passes its shift state to
-   the next word, unless that word begins with a recognised escape sequence
-   or decodes cleanly only on its own; a UTF-16 word whose byte order mark
-   differs from the label's byte order passes it to following words without
-   one. Both are reported as `EncodedWordSplitCharacter`, and both apply
-   only to the built-in decoders: a caller's decoder and the UTF-8 override
-   see each word's own bytes. A UTF-16 code unit split between words is not
-   repaired. Counts in diagnostics are added up within one decoded text (a
+   the next word, unless that word begins with a recognised escape
+   sequence. The next word is decoded in that state even when it would
+   decode cleanly on its own, as Python does: a word that was really ASCII
+   comes out garbled with `MalformedCharsetData`, but Japanese text is never
+   silently read as ASCII. A UTF-16 word whose byte order mark differs from
+   the label's byte order passes it to following words without one; a
+   label that names a byte order (`utf-16le`) is a different charset from
+   one that does not (`utf-16`), so a byte order does not pass between
+   them. Both are reported as `EncodedWordSplitCharacter`, and both
+   apply only to the built-in decoders: a caller's decoder and the UTF-8
+   override see each word's own bytes. A UTF-16 code unit split between
+   words is not repaired. Counts in diagnostics are added up within one decoded text (a
    header value, or one phrase of an address), and merging sorts rather
    than hashes, so chosen labels cannot make it quadratic.
 4. RFC 2231 (V2-M9). Raw sections are kept, without enumerating their
