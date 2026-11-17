@@ -20,7 +20,8 @@ gleam build --target javascript
 cd "$here"
 npm ci --no-audit --no-fund
 
-if [ ! -d seeds/go-fuzz-corpus ]; then
+if [ ! -d seeds/go-fuzz-corpus/mail/corpus ]; then
+  rm -rf seeds/go-fuzz-corpus
   mkdir -p seeds/go-fuzz-corpus
   git -C seeds/go-fuzz-corpus init -q
   git -C seeds/go-fuzz-corpus fetch -q --depth 1 \
@@ -34,7 +35,8 @@ find "$root/test/fixtures" -type f \
   -exec sh -c 'cp "$1" "seeds/fixtures/$(basename "$(dirname "$1")")-$(basename "$1")"' _ {} \;
 
 # Inputs are capped at 64 KiB, and an input that takes more than 10 seconds
-# is a finding: the parser is meant to be linear.
-npx jazzer fuzz.js --sync corpus seeds/go-fuzz-corpus/mail/corpus seeds/fixtures \
-  -- -max_total_time="$seconds" -max_len=65536 -timeout=10 \
-  -artifact_prefix=findings/
+# is a finding: the parser is meant to be linear. jazzer.js sets
+# libFuzzer's timeout from its own --timeout, in milliseconds.
+npx jazzer fuzz.js --sync --timeout=10000 \
+  corpus seeds/go-fuzz-corpus/mail/corpus seeds/fixtures \
+  -- -max_total_time="$seconds" -max_len=65536 -artifact_prefix=findings/

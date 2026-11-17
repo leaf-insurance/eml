@@ -104,8 +104,30 @@ pub fn unknown_zones_test() {
   // A zone name after a numeric zone is ignored.
   assert parts("Tue, 1 Jul 2003 10:52:37 +0200 CEST")
     == Ok(#(2003, 7, 1, 10, 52, 37, 120, True))
-  assert parts("Tue, 1 Jul 2003 10:52:37 +0200 CEST x") == Error(Nil)
   assert parts("Tue, 1 Jul 2003 10:52:37 +5") == Error(Nil)
+  // fable-r6-D1: once a numeric zone is read, the rest is ignored.
+  assert parts("Mon, 2 Jan 2006 15:04:05 +0100 W. Europe Standard Time")
+    == Ok(#(2006, 1, 2, 15, 4, 5, 60, True))
+  assert parts("Mon, 2 Jan 2006 15:04:05 +0000 extra words")
+    == Ok(#(2006, 1, 2, 15, 4, 5, 0, True))
+  assert parts("Mon, 2 Jan 2006 15:04:05 CET DST") == Error(Nil)
+  assert parts("Mon, 2 Jan 2006 15:04:05 +0100abc") == Error(Nil)
+}
+
+/// pi-r6-4, pi-r6-5, fable-r6-T1: syntax the suite did not pin.
+pub fn syntax_test() {
+  // At most four digits of year, so seconds stay exact on JavaScript.
+  assert parts("1 Jan 999999999 00:00:01 +0000") == Error(Nil)
+  assert parts("Mon, 2 Jan 20060 15:04:05 +0000") == Error(Nil)
+  assert parts("1 Jan 9999 00:00 +0000") == Ok(#(9999, 1, 1, 0, 0, 0, 0, True))
+  // An unclosed comment.
+  assert parts("1 Jan 2000 00:00:00 +0000 (unclosed") == Error(Nil)
+  assert parts("1 Jan 2000 00:00:00 (unclosed") == Error(Nil)
+  assert parts("Mon, 2 Jan 2006 15:4:05 +0000") == Error(Nil)
+  assert parts("2 Jan 6 15:04 +0000") == Error(Nil)
+  assert parts("002 Jan 2006 15:04 +0000") == Error(Nil)
+  assert parts("Mon 2 Jan 2006 15:04 +0000")
+    == Ok(#(2006, 1, 2, 15, 4, 0, 0, True))
 }
 
 /// Components out of range are parsed, but not valid.
@@ -120,6 +142,10 @@ pub fn validity_test() {
     == Ok(#(2000, 2, 29, 10, 0, 0, 0, True))
   assert parts("29 Feb 1900 10:00 +0000")
     == Ok(#(1900, 2, 29, 10, 0, 0, 0, False))
+  assert parts("Mon, 0 Jan 2006 10:00 +0000")
+    == Ok(#(2006, 1, 0, 10, 0, 0, 0, False))
+  assert parts("1 Jan 2006 24:00:00 +0000")
+    == Ok(#(2006, 1, 1, 24, 0, 0, 0, False))
   assert parts("1 Jan 2000 10:00 +0060")
     == Ok(#(2000, 1, 1, 10, 0, 0, 60, False))
   // A leap second is valid.
@@ -129,6 +155,8 @@ pub fn validity_test() {
 
 pub fn day_of_week_test() {
   let assert Ok(d) = parse("Sunday, 1 Jan 2006 10:00 +0000")
+  assert d.day_of_week == Some(7)
+  let assert Ok(d) = parse("Sun, 1 Jan 2006 10:00 +0000")
   assert d.day_of_week == Some(7)
   let assert Ok(d) = parse("1 Jan 2006 10:00 +0000")
   assert d.day_of_week == None

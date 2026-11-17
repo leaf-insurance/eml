@@ -24,8 +24,6 @@ pub fn stalwart_vectors_test() {
   assert parse("<a@b>,<c@d>") == #(["a@b", "c@d"], [])
   assert parse("(comment) <a@b> (other)") == #(["a@b"], [])
   assert parse("<aé@b>") == #(["aé@b"], [])
-  assert parse("") == #([], [])
-  assert parse("   ") == #([], [])
 }
 
 /// Whitespace and comments inside the brackets are removed (obs-id-left is
@@ -50,6 +48,34 @@ pub fn recoveries_test() {
   assert parse("<>") == #([], [InvalidMessageId])
   assert parse("m") == #([], [InvalidMessageId])
   assert parse("< \r\n >") == #([], [InvalidMessageId])
+  // pi-r6-6: a field is present, so an empty one has no ID.
+  assert parse("") == #([], [InvalidMessageId])
+  assert parse("   ") == #([], [InvalidMessageId])
+  // fable-r6-M2.
+  assert parse("a@b>") == #(["a@b"], [InvalidMessageId])
+  assert parse("<a@b> \"q <c@d>") == #(["a@b"], [InvalidMessageId])
+  assert parse("<a@>") == #(["a@"], [InvalidMessageId])
+  assert parse("<@b>") == #(["@b"], [InvalidMessageId])
+}
+
+/// pi-r6-1: quoted strings, comments and domain literals are not structure.
+pub fn lexical_context_test() {
+  assert parse("<a(c <) @b>") == #(["a@b"], [])
+  assert parse("<\"a<b\" @example.org>") == #(["\"a<b\"@example.org"], [])
+  assert parse("<\"a\\\"b\"@c>") == #(["\"a\\\"b\"@c"], [])
+  assert parse("<a@[x>y]>") == #(["a@[x>y]"], [])
+  assert parse("<a@[x(y)]>") == #(["a@[x(y)]"], [])
+  assert parse("<a@[x<y]>") == #(["a@[x<y]"], [])
+  // An unclosed literal is not one.
+  assert parse("<a@[x> <c@d>") == #(["a@[x", "c@d"], [])
+}
+
+/// fable-r6-M1: a word with `@` in a phrase is not an ID when the field has
+/// bracketed IDs.
+pub fn phrase_with_at_test() {
+  assert parse("Message from joe@example.com of \"Mon\" <123@example.com>")
+    == #(["123@example.com"], [])
+  assert parse("foo@bar <a@b> baz@q") == #(["a@b"], [])
 }
 
 pub fn accessors_test() {
@@ -69,6 +95,14 @@ pub fn accessors_test() {
   let assert Ok(message) = eml.parse(<<"Subject: x\r\n\r\n">>)
   assert eml.message_id(eml.root(message)) == None
   assert eml.references(eml.root(message)) == []
+  // pi-r6-6: the first ID of the first field.
+  let assert Ok(message) =
+    eml.parse(<<"Message-ID: <>\r\nMessage-ID: <b@c>\r\n\r\n">>)
+  assert eml.message_id(eml.root(message)) == None
+  let assert Ok(message) = eml.parse(<<"Message-ID: <a@b> <c@d>\r\n\r\n">>)
+  assert eml.message_id(eml.root(message)) == Some("a@b")
+  let assert Ok(message) = eml.parse(<<"Message-ID: \r\n\r\n">>)
+  assert list.map(eml.diagnose(message), fn(d) { d.kind }) == [InvalidMessageId]
 }
 
 pub fn diagnose_test() {

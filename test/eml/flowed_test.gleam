@@ -16,6 +16,9 @@ pub fn soft_breaks_test() {
 pub fn delete_space_test() {
   // RFC 3676 §4.2: with delsp=yes the space is not part of the text.
   assert flowed.decode("Ver \r\nyes.\r\n", True) == "Veryes.\r\n"
+  // pi-r6-3: only the space goes, even when it ends a grapheme cluster.
+  assert flowed.decode("x\u{0600} \ny\n", True) == "x\u{0600}y\n"
+  assert flowed.decode("x\u{0600}\r\n", True) == "x\u{0600}\r\n"
 }
 
 pub fn space_stuffing_test() {

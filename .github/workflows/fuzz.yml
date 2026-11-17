@@ -2,14 +2,18 @@ name: fuzz
 
 # Coverage-guided fuzzing of the JavaScript build (dev/fuzz/run.sh). The
 # corpus is cached between runs; findings are uploaded as an artifact.
+# It runs twice a week because GitHub evicts a cache unused for 7 days.
 on:
   schedule:
-    - cron: "17 3 * * 1"
+    - cron: "17 3 * * 1,4"
   workflow_dispatch:
     inputs:
       seconds:
         description: "How long to fuzz, in seconds"
         default: "1800"
+
+permissions:
+  contents: read
 
 jobs:
   fuzz:
@@ -30,7 +34,9 @@ jobs:
           key: fuzz-corpus-${{ github.run_id }}
           restore-keys: fuzz-corpus-
       - run: gleam deps download
-      - run: dev/fuzz/run.sh "${{ inputs.seconds || '1800' }}"
+      - run: dev/fuzz/run.sh "$SECONDS_TO_FUZZ"
+        env:
+          SECONDS_TO_FUZZ: ${{ inputs.seconds || '1800' }}
       - if: failure()
         uses: actions/upload-artifact@v4
         with:

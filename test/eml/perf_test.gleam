@@ -14,6 +14,7 @@ import eml/flowed
 import eml/internal/base64
 import eml/internal/quoted_printable
 import eml/message_id
+import eml/support
 import gleam/bit_array
 import gleam/int
 import gleam/list
@@ -327,5 +328,28 @@ pub fn flowed_test() {
       let assert Ok(text) = bit_array.to_string(input)
       flowed.decode(text, True)
     },
+  )
+}
+
+/// fable-r6-Z2: the fuzz target decodes each body once, not once for every
+/// container around it.
+pub fn exercise_nested_test() {
+  assert_linear(
+    "exercise nested",
+    fn(k) {
+      let depth = 7 * k
+      let open =
+        int.range(from: 1, to: depth + 1, with: "", run: fn(acc, n) {
+          let b = int.to_string(n)
+          acc
+          <> "Content-Type: multipart/mixed; boundary="
+          <> b
+          <> "\r\n\r\n--"
+          <> b
+          <> "\r\n"
+        })
+      <<open:utf8, "\r\n":utf8, string.repeat("x", k * unit * 4):utf8>>
+    },
+    support.exercise,
   )
 }

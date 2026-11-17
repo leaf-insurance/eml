@@ -64,7 +64,7 @@ Milestones 1 to 3 are done:
   (`eml.unflow`);
 - `eml.diagnose` and `eml.validate`.
 
-Coverage-guided fuzzing of the JavaScript build runs weekly in CI
+Coverage-guided fuzzing of the JavaScript build runs twice a week in CI
 (`dev/fuzz/run.sh`).
 
 ## Development

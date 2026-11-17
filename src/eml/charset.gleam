@@ -257,13 +257,14 @@ pub fn decode_word(
 
 /// Decodes the words of a run that the built-in decoders decoded, together,
 /// when that is better than one by one: as UTF-8, when the override applies
-/// to them together, or else, when `repair` is set, by joining their bytes,
-/// when that leaves no malformed data. The charset is the first word's.
+/// to them together, or else by joining their bytes, when that leaves fewer
+/// malformed sequences than the `errors` of the words one by one. The
+/// charset is the first word's.
 @internal
 pub fn decode_together(
   words: List(#(BitArray, Charset)),
   options: Options,
-  repair: Bool,
+  errors: Int,
 ) -> Result(Decoded, Nil) {
   case words {
     [] -> Error(Nil)
@@ -273,7 +274,7 @@ pub fn decode_together(
         Whatwg(text_encoding.Iso2022Jp) -> Error(Nil)
         _ -> as_utf8(pieces, charset, options)
       }
-      case as_utf8, repair && can_join(charset) {
+      case as_utf8, errors > 0 && can_join(charset) {
         Ok(text), _ ->
           Ok(
             with_nul(done(
@@ -282,15 +283,19 @@ pub fn decode_together(
             )),
           )
         Error(_), True -> {
-          // A byte order mark at the start of a UTF-8 word is not text.
-          let pieces = case charset.family {
-            Whatwg(text_encoding.Utf8) -> list.map(pieces, utf8.strip_mark)
-            _ -> pieces
+          // A byte order mark at the start of a UTF-8 word is not text;
+          // `builtin` removes the first word's.
+          let pieces = case charset.family, pieces {
+            Whatwg(text_encoding.Utf8), [first, ..rest] -> [
+              first,
+              ..list.map(rest, utf8.strip_mark)
+            ]
+            _, _ -> pieces
           }
           let decoded = builtin(bit_array.concat(pieces), charset, <<>>)
-          case list.any(decoded.kinds, is_malformed) {
-            True -> Error(Nil)
-            False ->
+          case malformed_count(decoded.kinds) < errors {
+            False -> Error(Nil)
+            True ->
               Ok(with_nul(
                 Decoded(..decoded, kinds: [
                   diagnostic.EncodedWordSplitCharacter,
@@ -510,11 +515,15 @@ fn overridden(charset: Charset) -> Kind {
   diagnostic.DeclaredCharsetOverridden(option.unwrap(charset.declared, ""))
 }
 
-fn is_malformed(kind: Kind) -> Bool {
-  case kind {
-    diagnostic.MalformedCharsetData(_) -> True
-    _ -> False
-  }
+/// The number of malformed sequences that `kinds` report.
+@internal
+pub fn malformed_count(kinds: List(Kind)) -> Int {
+  list.fold(kinds, 0, fn(count, kind) {
+    case kind {
+      diagnostic.MalformedCharsetData(n) -> count + n
+      _ -> count
+    }
+  })
 }
 
 fn malformed(errors: Int) -> List(Kind) {

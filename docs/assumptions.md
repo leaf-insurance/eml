@@ -496,7 +496,9 @@ Two further rules apply:
 3. Encoded-words are decoded independently. A split multibyte character is
    repaired only on failure, only for charsets whose bytes can be joined
    (not ISO-2022-JP, not UTF-16), and only within one run of adjacent words
-   that share a charset (V2-m3). Test vector:
+   that share a charset (V2-m3). The joined bytes are kept when they have
+   fewer malformed sequences than the words one by one, so a subject that is
+   also cut short in its last character keeps the other repairs. Test vector:
    `=?utf-8?B?ww==?= =?utf-8?B?qQ==?=` decodes to `é`. A run is a sequence
    of words whose labels name the same charset (`utf-8` and `utf8`, say),
    but each word is decoded with its own label, so a caller's decoder sees
@@ -533,17 +535,25 @@ Two further rules apply:
 5. Dates keep their components, a validity flag and the raw text. Converting
    to a timestamp returns a `Result`. (M3: `eml/date`.) The obsolete syntax
    of RFC 5322 §4.3 is accepted. A zone whose meaning is unknown, or a
-   missing zone, is `-0000` (offset 0), as §4.3 asks; a numeric zone may be
-   followed by a zone name. A day of the week is kept but not checked. Out
+   missing zone, is `-0000` (offset 0), as §4.3 asks; whatever follows a
+   numeric zone after whitespace is ignored (`+0100 W. Europe Standard
+   Time`). The year has two to four digits, so timestamps stay exact on
+   JavaScript, and an unclosed comment makes the value not a date. A day of
+   the week is kept but not checked. Out
    of range components (31 April, hour 24, a zone's minutes over 59) parse,
    with `valid: False`; the timestamp is then `Error(Nil)`. A leap second is
    valid. `diagnose` reports `InvalidDate` for Date and Resent-Date.
 6. Message IDs (M3: `eml/message_id`) are returned without brackets and
    never lowercased. Inside the brackets, whitespace and comments are
    removed (obs-id-left is a local part); phrases between IDs are skipped
-   (obs-in-reply-to). An ID without brackets but with `@`, an unclosed
-   `<a@b`, an ID without `@`, an empty `<>` and a field without an ID are
-   kept or dropped as `eml/message_id` documents, with `InvalidMessageId`.
+   (obs-in-reply-to). Quoted strings, comments and domain literals are read
+   as such, so a `<` or `>` inside them is not structure. An ID without
+   brackets but with `@` (kept only when the field has no bracketed ID, as
+   otherwise it is a word of a phrase), an unclosed `<a@b`, an ID without
+   text on both sides of `@`, an empty `<>`, an unclosed quoted string and
+   a field without an ID (an empty field included) are kept or dropped as
+   `eml/message_id` documents, with `InvalidMessageId`. `eml.message_id` is
+   the first ID of the first Message-ID field.
 
 ## I. Helpers [M2]
 
@@ -566,8 +576,10 @@ Two further rules apply:
    decoding: `eml.unflow(entity, text)` joins soft line breaks when the
    part is `text/plain; format=flowed`, honouring `delsp=yes`. Quoted lines
    are written back with one `>` per level and a space. A soft line
-   followed by another quote depth, the signature separator, or the end is
-   treated as fixed.
+   followed by another quote depth, the signature separator, or the end
+   ends its paragraph (with `delsp=yes` its space is still deleted). As RFC
+   3676 says, a soft line absorbs an empty line after it. Unstuffed text
+   that begins with `>` cannot be told from a quote in the result.
 
 ## J. Performance
 
@@ -621,10 +633,12 @@ Two further rules apply:
      the structure.
 6. **[adopted]** Fuzzing [M3]. Evaluate jazzer.js on the JS build first. The
    seeds are go-fuzz-corpus/mail (Apache-2.0).
-   (M3: `dev/fuzz/run.sh`, run weekly by `.github/workflows/fuzz.yml`. The
-   target is `exercise` in `test/eml/support.gleam`, which parses the input
-   and calls every accessor; the property tests use it too. The seeds are
-   fetched at a pinned commit, with eml's own fixtures. An input over 10
+   (M3: `dev/fuzz/run.sh`, run twice a week by
+   `.github/workflows/fuzz.yml`, since GitHub evicts a cache unused for 7
+   days. The target is `exercise` in `test/eml/support.gleam`, which parses
+   the input and calls every accessor, decoding only leaves so that its own
+   work stays linear in nesting; the property tests use it too. The seeds
+   are fetched at a pinned commit, with eml's own fixtures. An input over 10
    seconds counts as a finding.)
 7. **[decided]** gen_smtp is not used, even for differential testing. leaf's
    fixtures stay out of this repo. A differential run can be done from

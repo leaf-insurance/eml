@@ -7,6 +7,7 @@ import eml/date
 import eml/diagnostic.{type Kind}
 import eml/encoded_word
 import eml/filename
+import eml/flowed
 import eml/internal/structured
 import eml/message_id
 import eml/mime
@@ -92,13 +93,15 @@ pub fn walk(entity: Entity) -> Nil {
 }
 
 /// `walk`, also parsing up to `embedded` levels of encoded `message/*`
-/// parts with `eml.parse_embedded`.
+/// parts with `eml.parse_embedded`. Only leaves are decoded, so that each
+/// byte is decoded once however deeply it is nested.
 fn walk_depth(entity: Entity, embedded: Int) -> Nil {
   let options = charset.default_options()
-  let _ = eml.decode_body(entity)
+  let override = charset.with_utf8_override(options, True)
   list.each(eml.headers(entity), fn(header) {
     let value = structured.unfold(header.value)
     let _ = encoded_word.decode(value, options)
+    let _ = encoded_word.decode(value, override)
     let _ = address.parse(value, options)
     let _ = message_id.parse(value)
     case date.parse(value) {
@@ -116,18 +119,12 @@ fn walk_depth(entity: Entity, embedded: Int) -> Nil {
     }
     None -> Nil
   }
-  case eml.decode_text(entity) {
-    #(Ok(text), _) -> {
-      let _ = eml.unflow(entity, text)
-      Nil
-    }
-    #(Error(_), _) -> Nil
-  }
   case eml.body(entity) {
     eml.Multipart(parts:, ..) ->
       list.each(parts, fn(part) { walk_depth(part, embedded) })
     eml.Embedded(child) -> walk_depth(child, embedded)
-    eml.Leaf | eml.Opaque(_) ->
+    eml.Leaf | eml.Opaque(_) -> {
+      decode_leaf(entity)
       case eml.content_type(entity).type_, embedded > 0 {
         "message", True ->
           case eml.parse_embedded(entity, eml.default_options()) {
@@ -139,5 +136,19 @@ fn walk_depth(entity: Entity, embedded: Int) -> Nil {
           }
         _, _ -> Nil
       }
+    }
+  }
+}
+
+fn decode_leaf(entity: Entity) -> Nil {
+  let _ = eml.decode_body(entity)
+  case eml.decode_text(entity) {
+    #(Ok(text), _) -> {
+      let _ = eml.unflow(entity, text)
+      let _ = flowed.decode(text, False)
+      let _ = flowed.decode(text, True)
+      Nil
+    }
+    #(Error(_), _) -> Nil
   }
 }

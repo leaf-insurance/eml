@@ -5,8 +5,10 @@
 //// whitespace anywhere between the parts, two- and three-digit years, no
 //// seconds, and alphabetic zones. As the RFC asks, a zone whose meaning is
 //// not known (military letters, `CEST`, ...) counts as `-0000`, offset 0;
-//// so does a missing zone. A numeric zone may be followed by a zone name
-//// (`+0200 CEST`). Anything else is not a date.
+//// so does a missing zone. Whatever follows a numeric zone after
+//// whitespace is ignored (`+0200 CEST`, `+0100 W. Europe Standard Time`). The year has two to
+//// four digits. Anything else, including an unclosed comment, is not a
+//// date.
 ////
 //// Parsing checks only the syntax: `valid` says whether the components
 //// name an actual time (no 31 April, no hour 24). The day of the week is
@@ -42,11 +44,12 @@ pub type Date {
 /// Parses an unfolded Date field value. Returns `Error(Nil)` when it is
 /// not a date.
 pub fn parse(value: BitArray) -> Result(Date, Nil) {
+  use Nil <- result.try(comments_closed(value, 0))
   let rest = structured.skip_cfws(value)
   use #(day_of_week, rest) <- result.try(day_of_week(rest))
   use #(day, _, rest) <- result.try(number(rest, 1, 2))
   use #(month, rest) <- result.try(month(rest))
-  use #(year, digits, rest) <- result.try(number(rest, 2, 9))
+  use #(year, digits, rest) <- result.try(number(rest, 2, 4))
   use #(hour, _, rest) <- result.try(number(rest, 1, 2))
   use rest <- result.try(colon(rest))
   use #(minute, _, rest) <- result.try(number(rest, 2, 2))
@@ -209,7 +212,7 @@ fn colon(rest: BitArray) -> Result(BitArray, Nil) {
   }
 }
 
-/// The zone and whatever may follow it. Returns the offset, and whether its
+/// The zone: a numeric zone and whitespace, or a zone name and the end. Returns the offset, and whether its
 /// minutes are in range.
 fn zone(rest: BitArray) -> Result(#(Int, Bool), Nil) {
   case rest {
@@ -230,17 +233,31 @@ fn zone(rest: BitArray) -> Result(#(Int, Bool), Nil) {
         0x2D -> -offset
         _ -> offset
       }
-      // A zone name may follow: `+0200 CEST`.
-      let rest = structured.skip_cfws(rest)
-      let #(_, rest) = word(rest)
-      use Nil <- result.try(end(rest))
-      Ok(#(offset, minutes <= 59))
+      case rest {
+        <<>> | <<" ", _:bytes>> | <<"\t", _:bytes>> | <<"(", _:bytes>> ->
+          Ok(#(offset, minutes <= 59))
+        _ -> Error(Nil)
+      }
     }
     _ -> {
       let #(name, rest) = word(rest)
       use Nil <- result.try(end(rest))
       Ok(#(list.key_find(zone_names, name) |> result.unwrap(0), True))
     }
+  }
+}
+
+/// Whether every comment is closed. Comments nest, and a backslash quotes
+/// the next character.
+fn comments_closed(rest: BitArray, depth: Int) -> Result(Nil, Nil) {
+  case rest, depth {
+    <<>>, 0 -> Ok(Nil)
+    <<>>, _ -> Error(Nil)
+    <<"(", rest:bytes>>, _ -> comments_closed(rest, depth + 1)
+    <<")", rest:bytes>>, _ if depth > 0 -> comments_closed(rest, depth - 1)
+    <<"\\", _, rest:bytes>>, _ if depth > 0 -> comments_closed(rest, depth)
+    <<_, rest:bytes>>, _ -> comments_closed(rest, depth)
+    _, _ -> Error(Nil)
   }
 }
 
@@ -251,7 +268,7 @@ fn end(rest: BitArray) -> Result(Nil, Nil) {
   }
 }
 
-/// A run of 1 to 9 ASCII digits, of at least `min` and at most `max`, and
+/// A run of ASCII digits, of at least `min` and at most `max`, and
 /// the CFWS after it. Returns the value and the number of digits.
 fn number(
   rest: BitArray,

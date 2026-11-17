@@ -315,12 +315,15 @@ fn decode_stretch(
   words: List(DecodedWord),
   options: charset.Options,
 ) -> #(String, List(Kind)) {
-  let repair = list.any(words, fn(word) { list.any(word.kinds, is_malformed) })
+  let errors =
+    list.fold(words, 0, fn(errors, word) {
+      errors + charset.malformed_count(word.kinds)
+    })
   case
     charset.decode_together(
       list.filter_map(words, fn(word) { word.piece }),
       options,
-      repair,
+      errors,
     )
   {
     Ok(charset.Decoded(text: Ok(text), kinds:, ..)) -> #(
@@ -364,13 +367,6 @@ fn decode_word(
         Error(Nil),
       ),
     )
-  }
-}
-
-fn is_malformed(kind: Kind) -> Bool {
-  case kind {
-    diagnostic.MalformedCharsetData(_) -> True
-    _ -> False
   }
 }
 

@@ -8,6 +8,8 @@
 //// lines are written with `>` for each level and one space before the
 //// text. Line breaks keep their style (CRLF or LF).
 
+import eml/internal/utf8
+import gleam/bit_array
 import gleam/list
 import gleam/string
 
@@ -39,7 +41,7 @@ fn lines(raw: List(String), acc: List(Line)) -> List(Line) {
       }
     [first, ..rest] ->
       case string.ends_with(first, "\r") {
-        True -> lines(rest, [line(string.drop_end(first, 1), "\r\n"), ..acc])
+        True -> lines(rest, [line(drop_last(first), "\r\n"), ..acc])
         False -> lines(rest, [line(first, "\n"), ..acc])
       }
   }
@@ -80,7 +82,7 @@ fn paragraphs(
       case string.ends_with(line.content, " ") && line.content != "-- " {
         True -> {
           let content = case delete_space {
-            True -> string.drop_end(line.content, 1)
+            True -> drop_last(line.content)
             False -> line.content
           }
           let open = Open(line.depth, [content, ..parts], line.break)
@@ -108,4 +110,13 @@ fn close(open: Open, out: List(String)) -> List(String) {
       [break, text, prefix, ..out]
     }
   }
+}
+
+/// Drops the last byte of text that ends in an ASCII character.
+/// `string.drop_end` would drop a whole grapheme cluster.
+fn drop_last(text: String) -> String {
+  let bits = <<text:utf8>>
+  let assert Ok(bits) = bit_array.slice(bits, 0, bit_array.byte_size(bits) - 1)
+  let assert Ok(text) = utf8.to_string(bits)
+  text
 }

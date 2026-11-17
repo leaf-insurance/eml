@@ -695,8 +695,8 @@ pub fn message_ids(entity: Entity, name: String) -> Lookup(List(String)) {
 
 /// The message's ID: the first ID in the first Message-ID field.
 pub fn message_id(entity: Entity) -> Option(String) {
-  case all_message_ids(entity, "message-id") {
-    [id, ..] -> Some(id)
+  case header_values(entity, "message-id") {
+    [value, ..] -> list.first(message_id.parse(value).0) |> option.from_result
     [] -> None
   }
 }

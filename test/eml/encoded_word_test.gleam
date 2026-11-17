@@ -349,3 +349,48 @@ pub fn merged_counts_keep_first_position_test() {
       diagnostic.C1ReinterpretedAsWindows1252,
     ])
 }
+
+/// pi-r6-2: a stretch strips one byte order mark per word, not one more.
+pub fn one_mark_per_word_test() {
+  assert decode(<<"=?utf-8?B?77u/77u/QQ==?= =?utf-8?Q?=C3?= =?utf-8?Q?=A9?=">>)
+    == #("\u{FEFF}Aé", [diagnostic.EncodedWordSplitCharacter])
+}
+
+/// fable-r6-E1: a join is kept when it has fewer errors than the words.
+pub fn partial_repair_test() {
+  assert decode(<<"=?utf-8?Q?=C3?= =?utf-8?Q?=A9?= =?utf-8?Q?=E4?=">>)
+    == #("é\u{FFFD}", [
+      diagnostic.EncodedWordSplitCharacter,
+      diagnostic.MalformedCharsetData(1),
+    ])
+  assert decode(<<"=?euc-kr?Q?=B0?= =?euc-kr?Q?=A1?= =?euc-kr?Q?=FF?=">>)
+    == #("가\u{FFFD}", [
+      diagnostic.EncodedWordSplitCharacter,
+      diagnostic.MalformedCharsetData(1),
+    ])
+}
+
+/// fable-r6-T1: override and repair cases the suite did not pin.
+pub fn override_and_repair_details_test() {
+  let override = charset.default_options() |> charset.with_utf8_override(True)
+  let decode = encoded_word.decode(_, override)
+  // Not valid UTF-8 together, so no word is overridden.
+  assert decode(<<"=?iso-8859-1?Q?=A9?= =?iso-8859-1?Q?=C3=A9?=">>)
+    == #("©Ã©", [])
+  assert decode(<<"=?gbk?Q?=EF=BB=BF?= =?gbk?Q?=E4=B8=AD?=">>)
+    == #("中", [diagnostic.DeclaredCharsetOverridden("gbk")])
+  assert decode(<<"=?iso-8859-1?Q?abc?= =?latin1?Q?=C3=A9?=">>)
+    == #("abcé", [
+      diagnostic.DeclaredCharsetOverridden("iso-8859-1"),
+      diagnostic.DeclaredCharsetOverridden("latin1"),
+    ])
+  // A repaired stretch keeps its transfer diagnostics.
+  let #(text, kinds) =
+    encoded_word.decode(
+      <<"=?utf-8?Q?=ZZ=C3?= =?utf-8?Q?=A9?=">>,
+      charset.default_options(),
+    )
+  assert text == "=ZZé"
+  assert list.contains(kinds, diagnostic.EncodedWordSplitCharacter)
+  assert list.length(kinds) == 2
+}
