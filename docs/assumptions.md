@@ -34,8 +34,9 @@ rules could apply to the same input, the order is stated explicitly.
      MIME tree, and identity/base64/QP decoding (§L).
    - **M2:** unstructured header text (RFC 2047), filenames (RFC 2231), charset
      decoding, the address view, and body/attachment roles.
-   - **M3:** dates, message IDs, format=flowed, more charsets, `Flatten`
-     limits, and coverage-guided fuzzing.
+   - **M3:** dates, message IDs, format=flowed, more charsets, and
+     coverage-guided fuzzing. (`Flatten` limits were planned for M3, and
+     dropped.)
 5. **[adopted]** The library only parses. There is no renderer, and it makes
    no DKIM or re-serialisation promise. Encoders exist only in tests.
 6. **[assumed]** The input is one message (a `.eml` file). Splitting mbox
@@ -66,8 +67,9 @@ rules could apply to the same input, the order is stated explicitly.
    `default_options()` plus `with_*` setters, which clamp values to a valid
    range (documented), so `parse` never sees an invalid configuration.
    Options are never stored inside a `Message`.
-3. **[decided]** In M1, limits only fail. `on_limit: Flatten` moves to M3,
-   once a per-limit action matrix exists (F05, V2-B1).
+3. **[decided]** Limits only fail. `on_limit: Flatten` was planned for M3,
+   once a per-limit action matrix existed (F05, V2-B1), and was dropped: it
+   is well defined only for depth.
 
    | Limit | Unit | Scope | Default |
    |---|---|---|---|
