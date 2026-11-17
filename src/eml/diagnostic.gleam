@@ -91,6 +91,11 @@ pub type Kind {
   AmbiguousParameter(name: String)
   MalformedParameter(name: String)
   InvalidAddress
+  /// A Date or Resent-Date field that is not a date, or names no actual
+  /// time.
+  InvalidDate
+  /// A message ID field needed one of the recoveries in `eml/message_id`.
+  InvalidMessageId
 
   /// Recorded once when `max_diagnostics` is reached. Its severity is the
   /// worst severity among the diagnostics that were dropped.
@@ -154,7 +159,9 @@ pub fn severity(kind: Kind) -> Severity {
     | InvalidEncodedWord(_)
     | AmbiguousParameter(_)
     | MalformedParameter(_)
-    | InvalidAddress -> Warning
+    | InvalidAddress
+    | InvalidDate
+    | InvalidMessageId -> Warning
 
     MissingBoundary
     | UnusableBoundary

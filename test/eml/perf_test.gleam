@@ -7,10 +7,13 @@
 import eml
 import eml/address
 import eml/charset
+import eml/date
 import eml/encoded_word
 import eml/filename
+import eml/flowed
 import eml/internal/base64
 import eml/internal/quoted_printable
+import eml/message_id
 import gleam/bit_array
 import gleam/int
 import gleam/list
@@ -279,5 +282,50 @@ pub fn colliding_charset_labels_test() {
       |> bit_array.from_string
     },
     fn(input) { encoded_word.decode(input, charset.default_options()) },
+  )
+}
+
+pub fn message_ids_test() {
+  assert_linear(
+    "message IDs",
+    fn(k) {
+      <<
+        string.repeat("<a@b> <unclosed@x <<< \"q\" (c) bare@x ", k * unit / 8):utf8,
+      >>
+    },
+    message_id.parse,
+  )
+  assert_linear(
+    "message ID with spaces",
+    fn(k) { <<"<", string.repeat("a ", k * unit):utf8, ">">> },
+    message_id.parse,
+  )
+}
+
+pub fn date_test() {
+  assert_linear(
+    "date with comments",
+    fn(k) {
+      <<
+        "Tue, 1 Jul 2003 ":utf8,
+        string.repeat("(a (b) c) ", k * unit / 2):utf8,
+        "10:52:37 +0200 ":utf8,
+        string.repeat("z", k * unit):utf8,
+      >>
+    },
+    date.parse,
+  )
+}
+
+pub fn flowed_test() {
+  assert_linear(
+    "flowed",
+    fn(k) {
+      <<string.repeat(">>> soft \r\n>>> soft \r\n> x\r\n", k * unit / 4):utf8>>
+    },
+    fn(input) {
+      let assert Ok(text) = bit_array.to_string(input)
+      flowed.decode(text, True)
+    },
   )
 }

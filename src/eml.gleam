@@ -13,13 +13,16 @@
 
 import eml/address.{type Address}
 import eml/charset
+import eml/date.{type Date, Date}
 import eml/diagnostic.{type Diagnostic, type Span}
 import eml/encoded_word
+import eml/flowed
 import eml/internal/base64
 import eml/internal/parser.{type Node}
 import eml/internal/quoted_printable
 import eml/internal/structured.{slice}
 import eml/internal/utf8
+import eml/message_id
 import eml/mime.{
   type ContentType, type Header, type Lookup, type OpaqueReason, type ParseError,
   type Segment, type TransferEncoding,
@@ -28,6 +31,7 @@ import eml/parameter
 import gleam/bit_array
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 
 /// A parsed message. It keeps the original input, which every entity and
@@ -254,6 +258,12 @@ pub fn diagnose(message: Message) -> List(Diagnostic) {
   ])
 }
 
+const date_fields = ["date", "resent-date"]
+
+const message_id_fields = [
+  "message-id", "in-reply-to", "references", "resent-message-id",
+]
+
 const address_fields = [
   "from", "sender", "reply-to", "to", "cc", "bcc", "resent-from",
   "resent-sender", "resent-to", "resent-cc", "resent-bcc",
@@ -265,10 +275,23 @@ fn header_diagnostics(entity: Entity) -> List(Diagnostic) {
   list.flat_map(headers(entity), fn(header) {
     let name = string.lowercase(header.name)
     let value = structured.unfold(header.value)
-    let kinds = case name == "subject", list.contains(address_fields, name) {
-      True, _ -> encoded_word.decode(value, options).1
-      _, True -> address.parse(value, options).1
-      False, False -> []
+    let kinds = case name {
+      "subject" -> encoded_word.decode(value, options).1
+      _ ->
+        case
+          list.contains(address_fields, name),
+          list.contains(date_fields, name),
+          list.contains(message_id_fields, name)
+        {
+          True, _, _ -> address.parse(value, options).1
+          _, True, _ ->
+            case date.parse(value) {
+              Ok(Date(valid: True, ..)) -> []
+              _ -> [diagnostic.InvalidDate]
+            }
+          _, _, True -> message_id.parse(value).1
+          False, False, False -> []
+        }
     }
     list.map(kinds, fn(kind) {
       diagnostic.new(kind, entity.node.path, Some(header.span))
@@ -647,6 +670,52 @@ pub fn from(entity: Entity) -> Lookup(List(Address)) {
   addresses(entity, "from")
 }
 
+/// The dates in every field with this name (see `eml/date`): `Error(Nil)`
+/// for a field that is not a date. `diagnose` reports those, and dates that
+/// name no actual time, in Date and Resent-Date.
+pub fn dates(entity: Entity, name: String) -> Lookup(Result(Date, Nil)) {
+  header_values(entity, name)
+  |> list.map(date.parse)
+  |> lookup
+}
+
+/// The Date field.
+pub fn date(entity: Entity) -> Lookup(Result(Date, Nil)) {
+  dates(entity, "date")
+}
+
+/// The message IDs in every field with this name, one list per field (see
+/// `eml/message_id`). `diagnose` reports the problems found in Message-ID,
+/// In-Reply-To, References and Resent-Message-ID.
+pub fn message_ids(entity: Entity, name: String) -> Lookup(List(String)) {
+  header_values(entity, name)
+  |> list.map(fn(value) { message_id.parse(value).0 })
+  |> lookup
+}
+
+/// The message's ID: the first ID in the first Message-ID field.
+pub fn message_id(entity: Entity) -> Option(String) {
+  case all_message_ids(entity, "message-id") {
+    [id, ..] -> Some(id)
+    [] -> None
+  }
+}
+
+/// The IDs in every In-Reply-To field.
+pub fn in_reply_to(entity: Entity) -> List(String) {
+  all_message_ids(entity, "in-reply-to")
+}
+
+/// The IDs in every References field.
+pub fn references(entity: Entity) -> List(String) {
+  all_message_ids(entity, "references")
+}
+
+fn all_message_ids(entity: Entity, name: String) -> List(String) {
+  header_values(entity, name)
+  |> list.flat_map(fn(value) { message_id.parse(value).0 })
+}
+
 /// The first Content-Disposition field, parsed. `None` when it is absent or
 /// has no disposition type.
 pub fn disposition(entity: Entity) -> Option(mime.Disposition) {
@@ -785,6 +854,22 @@ pub fn decode_text_with(
       list.map(kinds, fn(kind) { diagnostic.new(kind, path, span) }),
     ),
   )
+}
+
+/// Joins the soft line breaks of a part's decoded text (see `eml/flowed`)
+/// when its Content-Type is `text/plain; format=flowed`, deleting the
+/// trailing spaces when it has `delsp=yes`. Other text is returned as it is.
+pub fn unflow(entity: Entity, text: String) -> String {
+  let content_type = entity.node.content_type
+  let parameter = fn(name) {
+    list.key_find(content_type.parameters, name)
+    |> result.map(structured.ascii_lowercase)
+  }
+  case content_type.type_, content_type.subtype, parameter("format") {
+    "text", "plain", Ok("flowed") ->
+      flowed.decode(text, parameter("delsp") == Ok("yes"))
+    _, _, _ -> text
+  }
 }
 
 /// The declared `charset` parameter of the content type, if any.

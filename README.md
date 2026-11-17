@@ -59,10 +59,12 @@ Milestones 1 and 2 are done:
 - filenames with RFC 2231 and RFC 2047 (`eml.filename`), and safe file
   names (`eml/filename`);
 - body and attachment roles, as in JMAP (`eml.bodies`);
+- dates (`eml.date`, `eml/date`), message IDs (`eml.message_id`,
+  `eml.in_reply_to`, `eml.references`), and format=flowed text
+  (`eml.unflow`);
 - `eml.diagnose` and `eml.validate`.
 
-Milestone 3 adds dates, message IDs, format=flowed, more charsets, and
-coverage-guided fuzzing.
+Milestone 3 also adds coverage-guided fuzzing.
 
 ## Development
 

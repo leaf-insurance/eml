@@ -529,7 +529,19 @@ Two further rules apply:
    3. Content-Type `name`;
    4. RFC 2047 decoding, applied once, as a last resort.
 5. Dates keep their components, a validity flag and the raw text. Converting
-   to a timestamp returns a `Result`.
+   to a timestamp returns a `Result`. (M3: `eml/date`.) The obsolete syntax
+   of RFC 5322 §4.3 is accepted. A zone whose meaning is unknown, or a
+   missing zone, is `-0000` (offset 0), as §4.3 asks; a numeric zone may be
+   followed by a zone name. A day of the week is kept but not checked. Out
+   of range components (31 April, hour 24, a zone's minutes over 59) parse,
+   with `valid: False`; the timestamp is then `Error(Nil)`. A leap second is
+   valid. `diagnose` reports `InvalidDate` for Date and Resent-Date.
+6. Message IDs (M3: `eml/message_id`) are returned without brackets and
+   never lowercased. Inside the brackets, whitespace and comments are
+   removed (obs-id-left is a local part); phrases between IDs are skipped
+   (obs-in-reply-to). An ID without brackets but with `@`, an unclosed
+   `<a@b`, an ID without `@`, an empty `<>` and a field without an ID are
+   kept or dropped as `eml/message_id` documents, with `InvalidMessageId`.
 
 ## I. Helpers [M2]
 
@@ -548,6 +560,12 @@ Two further rules apply:
 3. Body and attachment roles follow an RFC 8621 §4.1.4-based algorithm that
    returns a role and a reason. It never descends into attached messages when
    choosing the parent's body.
+4. format=flowed (RFC 3676, M3) is an optional helper applied after
+   decoding: `eml.unflow(entity, text)` joins soft line breaks when the
+   part is `text/plain; format=flowed`, honouring `delsp=yes`. Quoted lines
+   are written back with one `>` per level and a space. A soft line
+   followed by another quote depth, the signature separator, or the end is
+   treated as fixed.
 
 ## J. Performance
 
@@ -648,6 +666,12 @@ otherwise, with these additions:
 - The gen_smtp fixtures `chinesemail` and `shift-jismail` are now decoded,
   and compared with text decoded independently by
   `dev/cjk_expectations.py`.
+- §H.5, §H.6, §I.4: dates, message IDs and format=flowed, with vectors
+  from Stalwart mail-parser's `resources/date.json` and `id.json` where
+  they follow RFC 5322 (some of its expectations are that library's own
+  recoveries, such as `+5` as a zone, and are not used).
+- `on_limit: Flatten` is dropped: limits stay fail-only. It can be added
+  later without breaking anything.
 
 ## L. M1 checklist
 
