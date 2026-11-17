@@ -1,0 +1,9 @@
+{
+  "name": "eml-fuzz",
+  "private": true,
+  "type": "module",
+  "description": "Coverage-guided fuzzing of eml's JavaScript build with jazzer.js",
+  "devDependencies": {
+    "@jazzer.js/core": "4.0.0"
+  }
+}

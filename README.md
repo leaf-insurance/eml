@@ -44,7 +44,7 @@ pub fn summary(bytes: BitArray) {
 
 ## Status
 
-Milestones 1 and 2 are done:
+Milestones 1 to 3 are done:
 
 - framing (CRLF, LF and CR line endings, BOM, mbox `From ` line), header
   blocks kept losslessly, the MIME tree, and base64 and quoted-printable
@@ -64,7 +64,8 @@ Milestones 1 and 2 are done:
   (`eml.unflow`);
 - `eml.diagnose` and `eml.validate`.
 
-Milestone 3 also adds coverage-guided fuzzing.
+Coverage-guided fuzzing of the JavaScript build runs weekly in CI
+(`dev/fuzz/run.sh`).
 
 ## Development
 
@@ -73,6 +74,7 @@ nix develop   # or direnv; provides Gleam, Erlang/OTP, Node and Elixir
 gleam test
 gleam test --target javascript
 gleam build && elixir -pa "build/dev/erlang/*/ebin" test/elixir_smoke/smoke.exs
+dev/fuzz/run.sh 600   # fuzz the JavaScript build for ten minutes
 ```
 
 The tests include fixtures from gen_smtp and Apache mime4j, with their

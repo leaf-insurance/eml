@@ -1,10 +1,18 @@
 //// Helpers shared by the parser tests.
 
 import eml.{type Entity, type Message}
+import eml/address
+import eml/charset
+import eml/date
 import eml/diagnostic.{type Kind}
+import eml/encoded_word
+import eml/filename
+import eml/internal/structured
+import eml/message_id
 import eml/mime
 import gleam/bit_array
 import gleam/list
+import gleam/option.{None, Some}
 
 /// Parses a message that must succeed, and checks the tiling invariant
 /// (assumptions.md §C.1) on every parse.
@@ -64,13 +72,72 @@ pub fn header_names(entity: Entity) -> List(String) {
   eml.headers(entity) |> list.map(fn(header) { header.name })
 }
 
-/// Visits every entity, decoding each body.
+/// Parses arbitrary input and calls every accessor on the result, checking
+/// the tiling invariant. The fuzz target (`dev/fuzz`) and the property tests
+/// use it: it must not crash for any input.
+pub fn exercise(input: BitArray) -> Nil {
+  case parse_bytes(input) {
+    Ok(message) -> {
+      let _ = eml.diagnose(message)
+      let _ = eml.bodies(message)
+      walk_depth(eml.root(message), 3)
+    }
+    Error(_) -> Nil
+  }
+}
+
+/// Visits every entity, decoding each body and header.
 pub fn walk(entity: Entity) -> Nil {
+  walk_depth(entity, 0)
+}
+
+/// `walk`, also parsing up to `embedded` levels of encoded `message/*`
+/// parts with `eml.parse_embedded`.
+fn walk_depth(entity: Entity, embedded: Int) -> Nil {
+  let options = charset.default_options()
   let _ = eml.decode_body(entity)
-  let _ = eml.headers(entity)
+  list.each(eml.headers(entity), fn(header) {
+    let value = structured.unfold(header.value)
+    let _ = encoded_word.decode(value, options)
+    let _ = address.parse(value, options)
+    let _ = message_id.parse(value)
+    case date.parse(value) {
+      Ok(date) -> {
+        let _ = date.to_unix_seconds(date)
+        Nil
+      }
+      Error(_) -> Nil
+    }
+  })
+  case eml.filename(entity) {
+    Some(name) -> {
+      let _ = filename.safe(name)
+      Nil
+    }
+    None -> Nil
+  }
+  case eml.decode_text(entity) {
+    #(Ok(text), _) -> {
+      let _ = eml.unflow(entity, text)
+      Nil
+    }
+    #(Error(_), _) -> Nil
+  }
   case eml.body(entity) {
-    eml.Multipart(parts:, ..) -> list.each(parts, walk)
-    eml.Embedded(child) -> walk(child)
-    eml.Leaf | eml.Opaque(_) -> Nil
+    eml.Multipart(parts:, ..) ->
+      list.each(parts, fn(part) { walk_depth(part, embedded) })
+    eml.Embedded(child) -> walk_depth(child, embedded)
+    eml.Leaf | eml.Opaque(_) ->
+      case eml.content_type(entity).type_, embedded > 0 {
+        "message", True ->
+          case eml.parse_embedded(entity, eml.default_options()) {
+            Ok(message) -> {
+              assert_tiles(message)
+              walk_depth(eml.root(message), embedded - 1)
+            }
+            Error(_) -> Nil
+          }
+        _, _ -> Nil
+      }
   }
 }

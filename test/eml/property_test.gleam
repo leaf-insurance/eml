@@ -22,10 +22,7 @@ fn config() {
 }
 
 fn check(input: BitArray) -> Nil {
-  case support.parse_bytes(input) {
-    Ok(message) -> support.walk(eml.root(message))
-    Error(_) -> Nil
-  }
+  support.exercise(input)
 }
 
 pub fn arbitrary_bytes_never_crash_test() {

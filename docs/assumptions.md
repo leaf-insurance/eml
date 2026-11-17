@@ -619,6 +619,11 @@ Two further rules apply:
      the structure.
 6. **[adopted]** Fuzzing [M3]. Evaluate jazzer.js on the JS build first. The
    seeds are go-fuzz-corpus/mail (Apache-2.0).
+   (M3: `dev/fuzz/run.sh`, run weekly by `.github/workflows/fuzz.yml`. The
+   target is `exercise` in `test/eml/support.gleam`, which parses the input
+   and calls every accessor; the property tests use it too. The seeds are
+   fetched at a pinned commit, with eml's own fixtures. An input over 10
+   seconds counts as a finding.)
 7. **[decided]** gen_smtp is not used, even for differential testing. leaf's
    fixtures stay out of this repo. A differential run can be done from
    leaf's side.

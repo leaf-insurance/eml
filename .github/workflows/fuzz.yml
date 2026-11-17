@@ -1,0 +1,38 @@
+name: fuzz
+
+# Coverage-guided fuzzing of the JavaScript build (dev/fuzz/run.sh). The
+# corpus is cached between runs; findings are uploaded as an artifact.
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "How long to fuzz, in seconds"
+        default: "1800"
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          gleam-version: "1.19.2"
+          rebar3-version: "3"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/cache@v4
+        with:
+          path: dev/fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      - run: gleam deps download
+      - run: dev/fuzz/run.sh "${{ inputs.seconds || '1800' }}"
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-findings
+          path: dev/fuzz/findings
