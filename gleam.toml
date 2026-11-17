@@ -15,7 +15,7 @@ internal_modules = ["eml/internal", "eml/internal/*"]
 
 [dependencies]
 gleam_stdlib = ">= 1.0.0 and < 2.0.0"
-text_encoding = { path = "../text_encoding" }
+text_encoding = { git = "https://github.com/Munksgaard/text_encoding.git", ref = "e4ee00a5df3e128cef981caea32902a5dd6314c0" }
 
 [dev_dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
